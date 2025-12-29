@@ -244,9 +244,6 @@ fn main() {
                     let name = pkg.clone().unwrap_or_else(|| "?".to_string());
                     println!("GAME: ON ({})", name);
                     post_notification(&format!("Game mode ON: {}", name));
-
-                    gamemode::am_kill_all();
-
                     // fan baseline now
                     if let Some(f) = fan.as_mut() {
                         f.force_level(&mut cache_u64, GAME_FAN_BASE);
