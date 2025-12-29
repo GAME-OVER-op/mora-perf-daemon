@@ -76,7 +76,3 @@ pub fn get_foreground_package() -> Option<String> {
 
     None
 }
-
-pub fn am_kill_all() {
-    let _ = Command::new("/system/bin/am").arg("kill-all").status();
-}
