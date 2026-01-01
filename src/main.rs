@@ -1,23 +1,32 @@
 
 mod config;
+mod config_watch;
 mod cpu;
 mod domain;
 mod fan;
 mod fmt;
 mod gamemode;
 mod gpu;
+mod leds;
+mod mem;
 mod notify;
+mod notifications;
 mod power;
 mod procwatch;
+mod profiles;
 mod screen;
 mod services;
+mod state;
 mod sysfs;
 mod tempzone;
 mod thermal;
+mod user_config;
+mod web;
 
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
@@ -29,14 +38,18 @@ use crate::{
     fmt::{fmt_c, fmt_hz, fmt_khz},
     gamemode::{get_foreground_package, load_game_list},
     gpu::read_gpu_util_any,
+    leds::Leds,
     notify::{ensure_icon_on_disk, post_notification},
+    profiles::{select_active_mode_profile, select_base_led, BaseLedDesired},
     power::ChargeProbe,
     procwatch::ProcWatch,
     screen::{detect_screen_probe, raw_screen_on},
+    state::SharedState,
     services::disable_thermal_services,
     sysfs::write_str_if_needed,
     tempzone::{zone_with_hysteresis, TempZone},
     thermal::{describe_paths, read_avg_temp_mc, read_soc_temp_mc},
+    user_config::{load_or_init, CONFIG_PATH},
 };
 
 fn main() {
@@ -68,6 +81,43 @@ fn main() {
         println!("CHG: ok");
     } else {
         println!("CHG: probe not found (assume OFF)");
+    }
+
+    // ============================================================
+    // Extended functionality: config/profiles/notifications/web UI
+    // ============================================================
+    let cfg_path = PathBuf::from(CONFIG_PATH);
+    let cfg = load_or_init(cfg_path.as_path());
+    let shared = Arc::new(RwLock::new(SharedState::new(cfg)));
+    let leds = Arc::new(Leds::new());
+
+    // Start background workers.
+    config_watch::spawn(shared.clone(), cfg_path.clone());
+    notifications::spawn(shared.clone(), leds.clone());
+    web::spawn(shared.clone(), leds.clone(), cfg_path.clone());
+
+    // Apply initial LED state (Normal profile, screen assumed ON).
+    {
+        let cfg = { shared.read().unwrap().config.clone() };
+        let prof = select_active_mode_profile(&cfg, false);
+        let led_sel = select_base_led(&cfg, true, false, false);
+
+        let desired = match led_sel.desired {
+            Some(BaseLedDesired::Fan(s)) => Some(crate::leds::DesiredEffect::Fan(s)),
+            Some(BaseLedDesired::External(s)) => Some(crate::leds::DesiredEffect::External(s)),
+            None => None,
+        };
+        leds.set_base_desired(desired);
+
+        let (des, last) = leds.get_base_state();
+        let (fan_des, fan_last) = leds.get_fan_state();
+        let mut s = shared.write().unwrap();
+        s.info.active_profile = prof.name;
+        s.info.led_profile = led_sel.source;
+        s.leds.base_desired = des;
+        s.leds.base_last_applied = last;
+        s.leds.fan_desired = fan_des;
+        s.leds.fan_last_applied = fan_last;
     }
 
     let mut fan = Fan::new();
@@ -344,10 +394,32 @@ fn main() {
             }
         }
 
+        // Read latest config once per loop.
+        let cfg = { shared.read().unwrap().config.clone() };
+
+        // charging config switch (defaults to ON)
+        let charging_enabled = cfg.charging.enabled;
+        let charging_effective = charging && charging_enabled;
+
+        // ------------------------------
+        // Profile/LED selection
+        // ------------------------------
+        let active_prof = select_active_mode_profile(&cfg, game_mode);
+        let led_sel = select_base_led(&cfg, screen_on, charging_effective, game_mode);
+        let desired = match led_sel.desired {
+            Some(BaseLedDesired::Fan(s)) => Some(crate::leds::DesiredEffect::Fan(s)),
+            Some(BaseLedDesired::External(s)) => Some(crate::leds::DesiredEffect::External(s)),
+            None => None,
+        };
+        leds.set_base_desired(desired);
+
+        let (base_des, base_last) = leds.get_base_state();
+        let (fan_des, fan_last) = leds.get_fan_state();
+
         // fan
         if let Some(f) = fan.as_mut() {
             let soc = soc_temp_mc.unwrap_or(-1);
-            f.apply(&mut cache_u64, soc, batt_temp_mc, screen_on, charging, game_mode);
+            f.apply(&mut cache_u64, soc, batt_temp_mc, screen_on, charging_effective, game_mode);
         }
 
         // idle mode
@@ -359,7 +431,7 @@ fn main() {
             idle_mode = true;
             println!("IDLE: enter");
 
-            if !charging && !game_mode {
+            if !charging_effective && !game_mode {
                 cpu0.idx = cpu0.base_index;
                 cpu2.idx = cpu2.base_index;
                 cpu5.idx = cpu5.base_index;
@@ -416,6 +488,38 @@ fn main() {
                 if idle_mode { " | idle" } else { "" },
                 if game_mode { " | game" } else { "" },
             );
+
+            {
+                let mut st = shared.write().unwrap();
+                st.info.cpu_avg_mc = cpu_avg_mc;
+                st.info.gpu_avg_mc = gpu_avg_mc;
+                st.info.soc_mc = soc_temp_mc;
+                st.info.batt_mc = batt_temp_mc;
+                st.info.temp_zone = format!("{:?}", zone);
+                // mora's reduction percent is returned as u32, UI stores it as u8.
+                // Clamp to avoid accidental overflow if implementation changes.
+                let rp = zone.reduction_percent();
+                st.info.reduce_percent = rp.min(u8::MAX as u32) as u8;
+            }
+        }
+
+        // Fast status update for other threads/UI.
+        {
+            let mut st = shared.write().unwrap();
+            st.info.screen_on = screen_on;
+            st.info.charging = charging;
+            st.info.charging_enabled = charging_enabled;
+            st.info.charging_effective = charging_effective;
+            st.info.game_mode = game_mode;
+            st.info.idle_mode = idle_mode;
+
+            // Profiles / LED state (updated continuously)
+            st.info.active_profile = active_prof.name.clone();
+            st.info.led_profile = led_sel.source.clone();
+            st.leds.base_desired = base_des.clone();
+            st.leds.base_last_applied = base_last.clone();
+            st.leds.fan_desired = fan_des;
+            st.leds.fan_last_applied = fan_last;
         }
 
         // sleep selection
