@@ -1,0 +1,1114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5" />
+  <title>mora</title>
+  <style>:root{
+  --bg:#000000;
+  --surface: rgba(12,12,16,.78);
+  --surface2: rgba(12,12,16,.58);
+  --border: rgba(255,255,255,.08);
+  --borderHot: rgba(255,100,120,.18);
+
+  --text-primary: rgba(245,245,250,.92);
+  --text-secondary: rgba(245,245,250,.74);
+  --muted: rgba(245,245,250,.62);
+
+  --accent-red: #ff3b5c;
+  --accent-red-rgb: 255,59,92;
+  --accent-blue: #3a86ff;
+  --accent-blue-rgb: 58,134,255;
+  --accent-yellow: #ffd86b;
+  --accent-yellow-rgb: 255,216,107;
+
+  --primary-color: var(--accent-red);
+  --primary-color-rgb: var(--accent-red-rgb);
+
+  --radius: 22px;
+  --radius-sm: 14px;
+  --shadow: 0 18px 60px rgba(0,0,0,.55);
+  --sidebar-compact-width: 64px;
+  --sidebar-full-width: 280px;
+  --transition: 260ms cubic-bezier(.2,.9,.2,1);
+}
+
+[data-theme="light"]{
+  --bg:#f6f7f9;
+  --surface: rgba(255,255,255,.92);
+  --surface2: rgba(255,255,255,.70);
+  --border: rgba(0,0,0,.10);
+  --borderHot: rgba(255,59,92,.18);
+  --text-primary: rgba(10,12,14,.92);
+  --text-secondary: rgba(10,12,14,.72);
+  --muted: rgba(10,12,14,.55);
+  --shadow: 0 18px 60px rgba(0,0,0,.14);
+}
+
+*{ box-sizing:border-box; margin:0; padding:0; }
+html,body{ height:100%; }
+
+body{
+  font-family: Inter, Segoe UI, Roboto, system-ui;
+  background: var(--bg);
+  color: var(--text-primary);
+  overflow-x:hidden;
+  line-height:1.5;
+}
+
+/* Mobile/WebView: remove the default gray square tap highlight + focus outlines */
+a, button, input, select, textarea, [role="button"]{
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+button:focus{ outline: none; }
+button:focus-visible{ outline: none; }
+
+/* Specifically the floating menu button */
+.hamburger:focus{ outline:none; box-shadow: 0 10px 30px rgba(var(--primary-color-rgb),0.28); }
+.hamburger:focus-visible{ outline:none; }
+.hamburger:active{ transform: scale(0.98); }
+
+/* Background paints */
+.bg{
+  position: fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(1100px 800px at 18% 8%, rgba(var(--accent-red-rgb),.10), transparent 62%),
+    radial-gradient(900px 700px at 82% 0%, rgba(255,107,125,.08), transparent 58%),
+    radial-gradient(1100px 900px at 62% 92%, rgba(var(--accent-yellow-rgb),.07), transparent 62%),
+    radial-gradient(900px 700px at 80% 84%, rgba(var(--accent-blue-rgb),.06), transparent 60%),
+    var(--bg);
+}
+
+.app-container{ position:relative; z-index:1; display:flex; min-height:100vh; width:100%; }
+
+.sidebar {
+  position: fixed; left:0; top:0; height:100vh; z-index:1000;
+  display:flex; flex-direction:column;
+  transition: transform var(--transition), width var(--transition);
+  width: var(--sidebar-compact-width);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+  overflow-x:hidden; overflow-y:auto;
+}
+
+.sidebar.open { width: var(--sidebar-full-width); }
+
+.sidebar-header{
+  display:flex; align-items:center; gap:12px;
+  padding: 20px 16px;
+  border-bottom: 1px solid var(--border);
+  min-height:80px;
+}
+
+.logo{
+  width:44px; height:44px; border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0; overflow:hidden;
+  background: transparent; /* no colorful frame */
+}
+
+.logo img{ width: 34px; height: 34px; object-fit: contain; filter: none; }
+
+.title-wrap{ overflow:hidden; flex:1; }
+.title{ font-weight:600; font-size:1.1rem; white-space:nowrap; opacity:0; transform: translateX(-8px);
+  transition: opacity var(--transition), transform var(--transition); color: var(--text-primary);
+}
+.subtitle{ font-size:0.85rem; color: var(--muted); white-space:nowrap; opacity:0; transform: translateX(-8px);
+  transition: opacity calc(var(--transition) + 80ms), transform calc(var(--transition) + 80ms);
+}
+.sidebar.open .title, .sidebar.open .subtitle{ opacity:1; transform:none; }
+
+.hamburger{
+  position: fixed; right:20px; bottom:20px; z-index:2000;
+  width:56px; height:56px; border-radius:50%;
+  background: var(--primary-color); color:#fff; border:none;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer; box-shadow: 0 4px 20px rgba(58,134,255,0.30);
+  transition: all var(--transition);
+}
+.hamburger{ box-shadow: 0 10px 30px rgba(var(--primary-color-rgb),0.28); }
+.hamburger.hidden{ opacity:0; transform: scale(0); pointer-events:none; }
+
+.nav{ padding:16px; display:flex; flex-direction:column; gap:8px; flex:1; }
+.nav-item{
+  display:flex; align-items:center; gap:12px; padding: 14px;
+  border-radius: 10px; color: var(--text-primary); text-decoration:none; cursor:pointer;
+  transition: background var(--transition), transform var(--transition);
+}
+.nav-item:hover{ background: rgba(var(--primary-color-rgb), 0.10); transform: translateX(2px); }
+.nav-item.active{ background: rgba(var(--primary-color-rgb), 0.16); border: 1px solid rgba(var(--primary-color-rgb),0.24); }
+.nav-item .ico{ width:28px; text-align:center; font-size: 1.1rem; flex-shrink:0; }
+.nav-item span{
+  white-space: nowrap; opacity:0; transform: translateX(-6px);
+  transition: opacity var(--transition), transform var(--transition);
+  font-weight: 500;
+}
+.sidebar.open .nav-item span{ opacity:1; transform:none; }
+
+.sidebar-footer{ padding:16px; border-top:1px solid var(--border); }
+.toggle-row{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.toggle-label{ font-size:0.95rem; color: var(--text-secondary); opacity:0; transform: translateX(-6px);
+  transition: opacity var(--transition), transform var(--transition);
+}
+.sidebar.open .toggle-label{ opacity:1; transform:none; }
+.theme-toggle{
+  width:44px; height:24px; border-radius:999px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  position: relative; cursor:pointer; flex-shrink:0;
+}
+[data-theme="light"] .theme-toggle{ background: rgba(0,0,0,0.08); }
+.theme-toggle::after{
+  content:""; width:18px; height:18px; border-radius:50%;
+  position:absolute; left:2px; top:2px;
+  background: var(--surface);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+  transition: transform var(--transition);
+}
+[data-theme="dark"] .theme-toggle::after{ transform: translateX(20px); }
+
+.overlay{
+  position: fixed; inset:0; background: rgba(0,0,0,0.25);
+  z-index: 900; opacity:0; pointer-events:none;
+  transition: opacity var(--transition);
+}
+.overlay.show{ opacity:1; pointer-events:auto; }
+
+.main{
+  margin-left: var(--sidebar-compact-width);
+  width: 100%;
+  padding: 24px;
+  transition: margin-left var(--transition);
+}
+.sidebar.open ~ .main{ margin-left: var(--sidebar-full-width); }
+
+@media (max-width: 760px){
+  .main{ margin-left: 0; padding: 18px; }
+  .sidebar{ transform: translateX(-100%); width: var(--sidebar-full-width); }
+  .sidebar.open{ transform: translateX(0); }
+  .sidebar.open ~ .main{ margin-left: 0; }
+}
+
+.page-title{ display:flex; align-items:flex-end; justify-content:space-between; gap:12px; margin-bottom: 16px; }
+.page-title h1{ font-size: 1.4rem; letter-spacing: 0.2px; }
+.page-title p{ color: var(--muted); font-size: 0.95rem; }
+
+.grid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+@media (max-width: 980px){ .grid{ grid-template-columns: repeat(1, 1fr); } }
+
+.card{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+
+.card h2{ font-size: 0.95rem; margin-bottom: 10px; color: var(--text-secondary); }
+
+.kv{ display:flex; justify-content:space-between; gap:10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.kv:last-child{ border-bottom:none; }
+.k{ color: var(--muted); }
+.v{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.row{ display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+label{ display:block; font-size: 0.80rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+select,input{
+  background: var(--surface2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 160px;
+}
+input[type="number"]{ min-width: 120px; }
+button{
+  background: rgba(var(--primary-color-rgb), 0.14);
+  border: 1px solid rgba(var(--primary-color-rgb), 0.35);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 10px 14px;
+  cursor:pointer;
+  font-weight: 600;
+}
+button:hover{ background: rgba(var(--primary-color-rgb), 0.20); }
+.hint{ color: var(--muted); font-size: 0.90rem; }
+.badge{ display:inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--borderHot);
+  background: rgba(var(--primary-color-rgb),0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+}
+
+.api-banner{
+  border-color: rgba(var(--accent-red-rgb),0.35);
+  background: rgba(var(--accent-red-rgb),0.06);
+}
+.api-banner .api-title{
+  color: var(--accent-red);
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 6px;
+}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="app-container">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo"><img src="red.png" alt="" /></div>
+      <div class="title-wrap">
+        <div class="title">mora</div>
+        <div class="subtitle">status panel</div>
+      </div>
+    </div>
+    <div class="nav">
+      <a class="nav-item active" id="nav_status"><div class="ico">●</div><span>Status</span></a>
+      <a class="nav-item" id="nav_profiles"><div class="ico">●</div><span>Profiles</span></a>
+    </div>
+    <div class="sidebar-footer">
+      <div class="toggle-row">
+        <div class="toggle-label">Theme</div>
+        <div class="theme-toggle" id="theme_toggle" title="theme"></div>
+      </div>
+      <div style="margin-top:12px" class="hint" id="cfg_err"></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay"></div>
+
+  <main class="main">
+    <section id="section_status">
+      <div class="page-title">
+        <div>
+          <h1>Status</h1>
+          <p>updates in real time</p>
+        </div>
+        <div class="badge" id="badge_profile">?</div>
+      </div>
+
+      <div class="card api-banner" id="api_banner" style="display:none; margin-bottom:14px;">
+        <div class="api-title">No API access</div>
+        <div class="hint" id="api_banner_text">Daemon is down, the API token is missing, or the app can't reach 127.0.0.1:1004.</div>
+      </div>
+
+      <div class="grid">
+        <div class="card" style="grid-column: span 4;">
+          <h2>Temperatures</h2>
+          <div class="kv"><div class="k">CPU avg</div><div class="v" id="t_cpu">?</div></div>
+          <div class="kv"><div class="k">GPU avg</div><div class="v" id="t_gpu">?</div></div>
+          <div class="kv"><div class="k">SOC</div><div class="v" id="t_soc">?</div></div>
+          <div class="kv"><div class="k">Battery</div><div class="v" id="t_batt">?</div></div>
+        </div>
+
+        <div class="card" style="grid-column: span 4;">
+          <h2>States</h2>
+          <div class="kv"><div class="k">Zone</div><div class="v" id="st_zone">?</div></div>
+          <div class="kv"><div class="k">Reduce</div><div class="v" id="st_reduce">?</div></div>
+          <div class="kv"><div class="k">Screen</div><div class="v" id="st_screen">?</div></div>
+          <div class="kv"><div class="k">Charging</div><div class="v" id="st_chg">?</div></div>
+          <div class="kv"><div class="k">Game</div><div class="v" id="st_game">?</div></div>
+          <div class="kv"><div class="k">Idle</div><div class="v" id="st_idle">?</div></div>
+          <div class="kv"><div class="k">LED profile</div><div class="v" id="st_ledprof">?</div></div>
+        </div>
+
+        <div class="card" style="grid-column: span 4;">
+          <h2>Lighting / RAM</h2>
+          <div class="kv"><div class="k">Fan LED</div><div class="v" id="st_fan">?</div></div>
+          <div class="kv"><div class="k">External LED</div><div class="v" id="st_ext">?</div></div>
+          <div class="kv"><div class="k">VmRSS</div><div class="v" id="st_mem">?</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section_profiles" style="display:none;">
+      <div class="page-title">
+        <div>
+          <h1>Profiles</h1>
+          <p>enable/disable and parameters</p>
+        </div>
+        <div class="hint" id="save_msg"></div>
+      </div>
+
+      <div class="grid">
+        <div class="card" style="grid-column: span 6;">
+          <h2>Charging</h2>
+          <div class="row">
+            <div>
+              <label>Enabled</label>
+              <select id="c_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+            <div>
+              <label>Fan LED</label>
+              <select id="c_fan_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Mode</label>
+              <select id="c_fan_mode">
+                <option value="off">off</option>
+                <option value="flow">flow</option>
+                <option value="breathe">breathe</option>
+                <option value="flashing">flashing</option>
+                <option value="steady">steady</option>
+              </select>
+            </div>
+            <div>
+              <label>Color</label>
+              <select id="c_fan_color">
+                <option value="rose">rose</option>
+                <option value="yellow">yellow</option>
+                <option value="green">green</option>
+                <option value="blue">blue</option>
+                <option value="cyan">cyan</option>
+                <option value="purple">purple</option>
+                <option value="orange">orange</option>
+                <option value="mixed_1">mixed_1</option>
+                <option value="mixed_2">mixed_2</option>
+                <option value="mixed_3">mixed_3</option>
+                <option value="mixed_4">mixed_4</option>
+                <option value="mixed_5">mixed_5</option>
+                <option value="mixed_6">mixed_6</option>
+                <option value="mixed_7">mixed_7</option>
+              </select>
+            </div>
+          </div>
+          <div class="hint" style="margin-top:10px;">Turning this OFF makes it behave as if charging is not connected.</div>
+        </div>
+
+        <div class="card" style="grid-column: span 6;">
+          <h2>Notifications → external LED</h2>
+          <div class="row">
+            <div>
+              <label>Enabled</label>
+              <select id="n_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+            <div>
+              <label>Stop</label>
+              <select id="n_stop">
+                <option value="until_screen_on">UntilScreenOn</option>
+                <option value="for_seconds">ForSeconds(N)</option>
+              </select>
+            </div>
+            <div>
+              <label>Seconds</label>
+              <input id="n_secs" type="number" min="1" max="3600" value="10" />
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Mode</label>
+              <select id="n_mode">
+                <option value="steady">steady</option>
+                <option value="breathe">breathe</option>
+                <option value="flashing">flashing</option>
+              </select>
+            </div>
+            <div>
+              <label>Color</label>
+              <select id="n_color">
+                <option value="red">red</option>
+                <option value="orange">orange</option>
+                <option value="yellow">yellow</option>
+                <option value="green">green</option>
+                <option value="cyan">cyan</option>
+                <option value="blue">blue</option>
+                <option value="purple">purple</option>
+                <option value="pink">pink</option>
+                <option value="multi" style="display:none">multi</option>
+                <option value="white" style="display:none">white</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: span 6;">
+          <h2>Normal</h2>
+          <div class="row">
+            <div>
+              <label>Enabled</label>
+              <select id="p_n_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+            <div>
+              <label>Fan LED</label>
+              <select id="p_n_fan_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+            <div>
+              <label>External LED</label>
+              <select id="p_n_ext_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Fan Mode</label>
+              <select id="p_n_mode">
+                <option value="off">off</option>
+                <option value="flow">flow</option>
+                <option value="breathe">breathe</option>
+                <option value="flashing">flashing</option>
+                <option value="steady">steady</option>
+              </select>
+            </div>
+            <div>
+              <label>Fan Color</label>
+              <select id="p_n_color">
+                <option value="rose">rose</option>
+                <option value="yellow">yellow</option>
+                <option value="green">green</option>
+                <option value="blue">blue</option>
+                <option value="cyan">cyan</option>
+                <option value="purple">purple</option>
+                <option value="orange">orange</option>
+                <option value="mixed_1">mixed_1</option>
+                <option value="mixed_2">mixed_2</option>
+                <option value="mixed_3">mixed_3</option>
+                <option value="mixed_4">mixed_4</option>
+                <option value="mixed_5">mixed_5</option>
+                <option value="mixed_6">mixed_6</option>
+                <option value="mixed_7">mixed_7</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Ext Mode</label>
+              <select id="p_n_ext_mode">
+                <option value="steady">steady</option>
+                <option value="breathe">breathe</option>
+                <option value="flashing">flashing</option>
+              </select>
+            </div>
+            <div>
+              <label>Ext Color</label>
+              <select id="p_n_ext_color">
+                <option value="red">red</option>
+                <option value="orange">orange</option>
+                <option value="yellow">yellow</option>
+                <option value="green">green</option>
+                <option value="cyan">cyan</option>
+                <option value="blue">blue</option>
+                <option value="purple">purple</option>
+                <option value="pink">pink</option>
+                <option value="multi" style="display:none">multi</option>
+                <option value="white" style="display:none">white</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: span 6;">
+          <h2>Gaming</h2>
+          <div class="row">
+            <div>
+              <label>Enabled</label>
+              <select id="p_g_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+            <div>
+              <label>Fan LED</label>
+              <select id="p_g_fan_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+            <div>
+              <label>External LED</label>
+              <select id="p_g_ext_enabled">
+                <option value="true">ON</option>
+                <option value="false">OFF</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Fan Mode</label>
+              <select id="p_g_mode">
+                <option value="off">off</option>
+                <option value="flow">flow</option>
+                <option value="breathe">breathe</option>
+                <option value="flashing">flashing</option>
+                <option value="steady">steady</option>
+              </select>
+            </div>
+            <div>
+              <label>Fan Color</label>
+              <select id="p_g_color">
+                <option value="rose">rose</option>
+                <option value="yellow">yellow</option>
+                <option value="green">green</option>
+                <option value="blue">blue</option>
+                <option value="cyan">cyan</option>
+                <option value="purple">purple</option>
+                <option value="orange">orange</option>
+                <option value="mixed_1">mixed_1</option>
+                <option value="mixed_2">mixed_2</option>
+                <option value="mixed_3">mixed_3</option>
+                <option value="mixed_4">mixed_4</option>
+                <option value="mixed_5">mixed_5</option>
+                <option value="mixed_6">mixed_6</option>
+                <option value="mixed_7">mixed_7</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Ext Mode</label>
+              <select id="p_g_ext_mode">
+                <option value="steady">steady</option>
+                <option value="breathe">breathe</option>
+                <option value="flashing">flashing</option>
+              </select>
+            </div>
+            <div>
+              <label>Ext Color</label>
+              <select id="p_g_ext_color">
+                <option value="red">red</option>
+                <option value="orange">orange</option>
+                <option value="yellow">yellow</option>
+                <option value="green">green</option>
+                <option value="cyan">cyan</option>
+                <option value="blue">blue</option>
+                <option value="purple">purple</option>
+                <option value="pink">pink</option>
+                <option value="multi" style="display:none">multi</option>
+                <option value="white" style="display:none">white</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<button class="hamburger" id="hamburger" aria-label="menu">☰</button>
+
+<script>
+
+// ----- mora API (Android) -----
+let MORA_BASE = "http://127.0.0.1:1004";
+let MORA_TOKEN = "";
+
+function tryLoadAuthFromAndroid(){
+  try{
+    if(typeof AndroidConfig !== 'undefined'){
+      if(AndroidConfig.getApiBaseUrl) MORA_BASE = AndroidConfig.getApiBaseUrl() || MORA_BASE;
+      if(AndroidConfig.getApiToken) MORA_TOKEN = AndroidConfig.getApiToken() || MORA_TOKEN;
+    }
+  }catch(e){ /* ignore */ }
+}
+
+function setMoraAuth(baseUrl, token){
+  if(baseUrl) MORA_BASE = baseUrl;
+  if(token) MORA_TOKEN = token;
+}
+
+window.__mora_onAndroidReady = function(){
+  try{
+    if(window.__MORA){
+      setMoraAuth(window.__MORA.baseUrl, window.__MORA.token);
+    }
+  }catch(e){ /* ignore */ }
+};
+
+// Run once for fallback (in case Android injection is delayed)
+tryLoadAuthFromAndroid();
+
+function apiFetch(path, opts){
+  const o = opts ? Object.assign({}, opts) : {};
+  const hIn = (o.headers || {});
+  const headers = new Headers(hIn);
+
+  if(MORA_TOKEN){
+    headers.set('Authorization', 'Bearer ' + MORA_TOKEN);
+    headers.set('X-Api-Key', MORA_TOKEN);
+  }
+
+  o.headers = headers;
+  return fetch(MORA_BASE + path, o);
+}
+// ----- /mora API -----
+
+// Fallback proxy via root shell (helps on devices where WebView can't reach localhost or headers get stripped)
+function proxyAvailable(){
+  try{ return (typeof AndroidConfig !== 'undefined') && (typeof AndroidConfig.proxyGet === 'function'); }
+  catch(e){ return false; }
+}
+
+function fakeResponse(status, body){
+  return {
+    ok: status >= 200 && status < 300,
+    status: status,
+    json: async ()=> JSON.parse(body),
+    text: async ()=> String(body)
+  };
+}
+
+function proxyDo(path, opts){
+  const method = (opts && opts.method) ? String(opts.method).toUpperCase() : 'GET';
+  let raw = '';
+  try{
+    if(method === 'GET' || method === 'HEAD'){
+      raw = AndroidConfig.proxyGet(path);
+    }else{
+      const body = (opts && opts.body) ? String(opts.body) : '';
+      raw = AndroidConfig.proxyPost(path, body);
+    }
+    const obj = JSON.parse(raw);
+    return fakeResponse(Number(obj.code || 0), obj.body || '');
+  }catch(e){
+    return fakeResponse(0, '');
+  }
+}
+
+function showApiBanner(msg){
+  const b = document.getElementById('api_banner');
+  const t = document.getElementById('api_banner_text');
+  if(b) b.style.display = '';
+  if(t && msg) t.textContent = msg;
+}
+
+function hideApiBanner(){
+  const b = document.getElementById('api_banner');
+  if(b) b.style.display = 'none';
+}
+
+if(!MORA_TOKEN){
+  showApiBanner('API token missing. Please make sure the daemon generated "api_token" in config.json (restart the daemon if needed).');
+}
+
+const $ = (id)=>document.getElementById(id);
+const sidebar = $('sidebar');
+const overlay = $('overlay');
+const hamburger = $('hamburger');
+const extModeSel = $('p_n_ext_mode');
+const extColorSel = $('p_n_ext_color');
+
+function updateExtColorsByMode(){
+  if(!extModeSel || !extColorSel) return;
+  const mode = extModeSel.value;
+  const opts = Array.from(extColorSel.options);
+
+  // On this firmware:
+  // - steady/breathe: orange slot is not present (idx0/idx1 are red/violet)
+  // - flashing: red slot is not present (idx0/idx1 are orange/pink)
+  opts.forEach(o=>{
+    if(o.value==='orange'){
+      o.hidden = (mode!=='flashing');
+      o.style.display = o.hidden ? 'none' : '';
+    }
+    if(o.value==='red'){
+      o.hidden = (mode==='flashing');
+      o.style.display = o.hidden ? 'none' : '';
+    }
+  });
+
+  // If current selection became hidden, pick the first visible option
+  const cur = extColorSel.selectedOptions[0];
+  if(cur && (cur.hidden || cur.style.display==='none')){
+    const first = opts.find(o=>!(o.hidden || o.style.display==='none'));
+    if(first) extColorSel.value = first.value;
+  }
+}
+
+if(extModeSel){
+  extModeSel.addEventListener('change', updateExtColorsByMode);
+}
+
+function openSidebar(){ sidebar.classList.add('open'); overlay.classList.add('show'); }
+function closeSidebar(){ sidebar.classList.remove('open'); overlay.classList.remove('show'); }
+
+hamburger.addEventListener('click', ()=>{
+  if(sidebar.classList.contains('open')) closeSidebar(); else openSidebar();
+});
+overlay.addEventListener('click', closeSidebar);
+
+function setPage(p){
+  $('section_status').style.display = (p==='status') ? '' : 'none';
+  $('section_profiles').style.display = (p==='profiles') ? '' : 'none';
+  $('nav_status').classList.toggle('active', p==='status');
+  $('nav_profiles').classList.toggle('active', p==='profiles');
+  if(window.innerWidth <= 760) closeSidebar();
+}
+
+$('nav_status').addEventListener('click', ()=>setPage('status'));
+$('nav_profiles').addEventListener('click', ()=>setPage('profiles'));
+
+// theme
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('theme', t);
+}
+const savedTheme = localStorage.getItem('theme') || 'dark';
+applyTheme(savedTheme);
+$('theme_toggle').addEventListener('click', ()=>{
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(cur==='dark' ? 'light' : 'dark');
+});
+
+// helpers
+function fTemp(x){
+  if(x===null || x===undefined) return '?';
+  return x.toFixed(1)+'C';
+}
+
+let lastCfgRev = -1;
+let saveTimer = null;
+let saving = false;
+
+function valBool(id){ return $(id).value === 'true'; }
+function setBool(id, b){ $(id).value = b ? 'true' : 'false'; }
+
+
+function applyCfg(cfg){
+  if(!cfg) return;
+
+  // Daemon config schema: profiles is an array of ProfileConfig objects.
+  // Example (from /api/config):
+  // { charging:{enabled, fan_led:null|{mode,color}}, notifications:{...}, fan_led:{default_mode,default_color}, profiles:[{name,type,enabled,fan_led,external_led}, ...] }
+  if(Array.isArray(cfg.profiles)){
+    const def = (cfg.fan_led || {});
+    const defFanMode = def.default_mode || 'off';
+    const defFanColor = def.default_color || 'mixed_7';
+
+    // charging
+    if(cfg.charging){
+      setBool('c_enabled', !!cfg.charging.enabled);
+      const chFan = cfg.charging.fan_led;
+      setBool('c_fan_enabled', !!chFan);
+      if(chFan){
+        $('c_fan_mode').value = chFan.mode || defFanMode;
+        $('c_fan_color').value = chFan.color || defFanColor;
+      }else{
+        $('c_fan_mode').value = defFanMode;
+        $('c_fan_color').value = defFanColor;
+      }
+    }
+
+    // notifications
+    if(cfg.notifications){
+      setBool('n_enabled', !!cfg.notifications.enabled);
+      const stopObj = cfg.notifications.stop_condition || {};
+      const stopKind = stopObj.type || stopObj.kind || 'until_screen_on';
+      $('n_stop').value = stopKind;
+      $('n_secs').value = Number(cfg.notifications.for_seconds || 10);
+      if(cfg.notifications.external_led){
+        $('n_mode').value = cfg.notifications.external_led.mode || 'flashing';
+        $('n_color').value = cfg.notifications.external_led.color || 'blue';
+      }
+    }
+
+    function findProfile(kind, name){
+      const arr = cfg.profiles || [];
+      const lk = String(kind || '').toLowerCase();
+      const ln = String(name || '').toLowerCase();
+      let p = arr.find(x => String(x.type || '').toLowerCase() === lk);
+      if(!p) p = arr.find(x => String(x.name || '').toLowerCase() === ln);
+      if(!p && lk === 'normal') p = arr.find(x => String(x.name || '').toLowerCase().includes('normal'));
+      if(!p && lk === 'gaming') p = arr.find(x => {
+        const n = String(x.name || '').toLowerCase();
+        return n.includes('gaming') || n.includes('game');
+      });
+      return p || null;
+    }
+
+    const n = findProfile('normal', 'Normal');
+    const g = findProfile('gaming', 'Gaming');
+
+    if(n){
+      setBool('p_n_enabled', !!n.enabled);
+
+      setBool('p_n_fan_enabled', !!n.fan_led);
+      if(n.fan_led){
+        $('p_n_mode').value = n.fan_led.mode || defFanMode;
+        $('p_n_color').value = n.fan_led.color || defFanColor;
+      }else{
+        $('p_n_mode').value = defFanMode;
+        $('p_n_color').value = defFanColor;
+      }
+
+      setBool('p_n_ext_enabled', !!n.external_led);
+      if(n.external_led){
+        $('p_n_ext_mode').value = n.external_led.mode || 'flashing';
+        $('p_n_ext_color').value = n.external_led.color || 'blue';
+      }
+    }
+
+    if(g){
+      setBool('p_g_enabled', !!g.enabled);
+
+      setBool('p_g_fan_enabled', !!g.fan_led);
+      if(g.fan_led){
+        $('p_g_mode').value = g.fan_led.mode || defFanMode;
+        $('p_g_color').value = g.fan_led.color || defFanColor;
+      }else{
+        $('p_g_mode').value = defFanMode;
+        $('p_g_color').value = defFanColor;
+      }
+
+      setBool('p_g_ext_enabled', !!g.external_led);
+      if(g.external_led){
+        $('p_g_ext_mode').value = g.external_led.mode || 'flashing';
+        $('p_g_ext_color').value = g.external_led.color || 'blue';
+      }
+    }
+
+    updateExtColorsByMode();
+    return;
+  }
+
+  // Legacy UI payload schema (kept for compatibility)
+
+  if(!cfg) return;
+  if(cfg.charging){
+    setBool('c_enabled', !!cfg.charging.enabled);
+    const fanOn = !!cfg.charging.fan_led;
+    setBool('c_fan_enabled', fanOn);
+    if(cfg.charging.fan_led){
+      $('c_fan_mode').value = cfg.charging.fan_led.mode || 'off';
+      $('c_fan_color').value = cfg.charging.fan_led.color || 'mixed_7';
+    }
+  }
+
+  if(cfg.notifications){
+    setBool('n_enabled', !!cfg.notifications.enabled);
+    $('n_stop').value = (cfg.notifications.stop_condition && cfg.notifications.stop_condition.type) ? cfg.notifications.stop_condition.type : 'until_screen_on';
+    $('n_secs').value = Number(cfg.notifications.for_seconds || 10);
+    if(cfg.notifications.external_led){
+      $('n_mode').value = cfg.notifications.external_led.mode || 'flashing';
+      $('n_color').value = cfg.notifications.external_led.color || 'blue';
+    }
+  }
+
+  const n = (cfg.profiles && cfg.profiles.normal) ? cfg.profiles.normal : null;
+  const g = (cfg.profiles && cfg.profiles.gaming) ? cfg.profiles.gaming : null;
+  if(n){
+    setBool('p_n_enabled', !!n.enabled);
+    setBool('p_n_fan_enabled', !!n.fan_led);
+    if(n.fan_led){ $('p_n_mode').value = n.fan_led.mode || 'off'; $('p_n_color').value = n.fan_led.color || 'mixed_7'; }
+    setBool('p_n_ext_enabled', !!n.external_led);
+    if(n.external_led){ $('p_n_ext_mode').value = n.external_led.mode || 'flashing'; $('p_n_ext_color').value = n.external_led.color || 'blue'; }
+  }
+  if(g){
+    setBool('p_g_enabled', !!g.enabled);
+    setBool('p_g_fan_enabled', !!g.fan_led);
+    if(g.fan_led){ $('p_g_mode').value = g.fan_led.mode || 'off'; $('p_g_color').value = g.fan_led.color || 'mixed_7'; }
+    setBool('p_g_ext_enabled', !!g.external_led);
+    if(g.external_led){ $('p_g_ext_mode').value = g.external_led.mode || 'flashing'; $('p_g_ext_color').value = g.external_led.color || 'blue'; }
+  }
+
+}
+
+function collectPayload(){
+  return {
+    charging: {
+      enabled: valBool('c_enabled'),
+      fan_enabled: valBool('c_fan_enabled'),
+      fan_led: { mode: $('c_fan_mode').value, color: $('c_fan_color').value }
+    },
+    notifications: {
+      enabled: valBool('n_enabled'),
+      stop_condition: { type: $('n_stop').value },
+      for_seconds: Number($('n_secs').value || 10),
+      external_led: { mode: $('n_mode').value, color: $('n_color').value }
+    },
+    profiles: {
+      normal: {
+        enabled: valBool('p_n_enabled'),
+        fan_enabled: valBool('p_n_fan_enabled'),
+        fan_led: { mode: $('p_n_mode').value, color: $('p_n_color').value },
+        ext_enabled: valBool('p_n_ext_enabled'),
+        external_led: { mode: $('p_n_ext_mode').value, color: $('p_n_ext_color').value }
+      },
+      gaming: {
+        enabled: valBool('p_g_enabled'),
+        fan_enabled: valBool('p_g_fan_enabled'),
+        fan_led: { mode: $('p_g_mode').value, color: $('p_g_color').value },
+        ext_enabled: valBool('p_g_ext_enabled'),
+        external_led: { mode: $('p_g_ext_mode').value, color: $('p_g_ext_color').value }
+      }
+    }
+  };
+}
+
+function scheduleSave(){
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSave, 450);
+}
+
+async function doSave(){
+  if(saving) return;
+  saving = true;
+  $('save_msg').textContent = 'Saving...';
+  try{
+    const payload = collectPayload();
+    // Use retry logic: the daemon returns an empty 404 for unauthorized access.
+    // If the token was generated after app start or injection lagged, we retry once.
+    const r = await fetchWithRetry("/api/save", { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    const t = await r.text();
+    if(!r.ok){
+      $('save_msg').textContent = (r.status === 404)
+        ? 'Error: no API access (wrong token?)'
+        : 'Error: ' + t;
+    } else {
+      $('save_msg').textContent = 'ok';
+      setTimeout(()=>{ if($('save_msg').textContent==='ok') $('save_msg').textContent=''; }, 1000);
+    }
+  }catch(e){
+    $('save_msg').textContent = 'Error: ' + String(e);
+  }
+  saving = false;
+}
+
+async function refreshCfg(){
+  try{
+    const r = await fetchWithRetry("/api/config");
+    if(r.ok){
+      const cfg = await r.json();
+      applyCfg(cfg);
+    }
+  }catch(e){
+    // ignore
+  }
+}
+
+['c_enabled','c_fan_enabled','c_fan_mode','c_fan_color',
+ 'n_enabled','n_stop','n_secs','n_mode','n_color',
+ 'p_n_enabled','p_n_fan_enabled','p_n_mode','p_n_color','p_n_ext_enabled','p_n_ext_mode','p_n_ext_color',
+ 'p_g_enabled','p_g_fan_enabled','p_g_mode','p_g_color','p_g_ext_enabled','p_g_ext_mode','p_g_ext_color']
+.forEach(id=>{
+  const el = $(id);
+  el.addEventListener('change', scheduleSave);
+  el.addEventListener('input', scheduleSave);
+});
+
+async function fetchWithRetry(path, opts){
+  try{
+    let r = await apiFetch(path, opts);
+    if(r && r.status === 404){
+      // 404 is used by the daemon for unauthorized access.
+      // Re-read token (might have been generated after the app start) and retry once.
+      tryLoadAuthFromAndroid();
+      r = await apiFetch(path, opts);
+    }
+
+    // If we still see "404" or other failures, try root-proxy fallback.
+    if((!r || !r.ok) && proxyAvailable()){
+      const pr = proxyDo(path, opts);
+      if(pr && pr.ok) return pr;
+    }
+    return r;
+  }catch(e){
+    // Network error (TypeError): fallback to root-proxy if possible
+    if(proxyAvailable()){
+      const pr = proxyDo(path, opts);
+      return pr;
+    }
+    throw e;
+  }
+}
+
+async function tick(){
+  try{
+    const r = await fetchWithRetry("/api/state");
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const s = await r.json();
+    hideApiBanner();
+
+    $('t_cpu').textContent = fTemp(s.temps.cpu);
+    $('t_gpu').textContent = fTemp(s.temps.gpu);
+    $('t_soc').textContent = fTemp(s.temps.soc);
+    $('t_batt').textContent = fTemp(s.temps.batt);
+
+    $('st_zone').textContent = (s.zone && s.zone.name) ? s.zone.name : '?';
+    $('st_reduce').textContent = ((s.zone && s.zone.reduce_percent) ? s.zone.reduce_percent : 0) + '%';
+    $('st_screen').textContent = s.screen_on ? 'ON' : 'OFF';
+    const chg = s.charging || {};
+    $('st_chg').textContent = (chg.hw ? 'ON' : 'OFF') + (chg.enabled ? '' : ' (disabled)');
+    $('st_game').textContent = s.game_mode ? 'ON' : 'OFF';
+    $('st_idle').textContent = s.idle_mode ? 'ON' : 'OFF';
+    $('st_ledprof').textContent = s.led_profile || '?';
+    $('badge_profile').textContent = s.active_profile || '?';
+
+    const fanSt = (s.leds && s.leds.fan_last_applied) ? s.leds.fan_last_applied : null;
+    let fan = 'off';
+    if(fanSt){ fan = fanSt.mode + ':' + fanSt.color; }
+    $('st_fan').textContent = fan;
+
+    let ext = 'off';
+    // Notification override (OUT)
+    if(s.leds && s.leds.external && s.leds.external.active){
+      const st = s.leds.external.setting;
+      const left = s.leds.external.ends_in_sec;
+      ext = st ? (st.mode+':'+st.color) : 'active';
+      if(left!==null && left!==undefined) ext += ' ('+left+'s)';
+    } else {
+      const baseExt = (s.leds && s.leds.base_external_last_applied) ? s.leds.base_external_last_applied : null;
+      if(baseExt){ ext = baseExt.mode + ':' + baseExt.color; }
+    }
+    $('st_ext').textContent = ext;
+    $('st_mem').textContent = (s.mem && s.mem.VmRSS_kb ? s.mem.VmRSS_kb : 0) + ' kB';
+
+    if(s.last_config_error){ $('cfg_err').textContent = s.last_config_error; }
+    else $('cfg_err').textContent = '';
+
+    if(s.config_rev !== lastCfgRev){
+      lastCfgRev = s.config_rev;
+      await refreshCfg();
+    }
+  }catch(e){
+    try{
+      const detail = (e && e.message) ? e.message : String(e);
+      const msg = (!MORA_TOKEN)
+        ? 'API token missing. Please restart the daemon so it can generate "api_token" in config.json. (' + detail + ')'
+        : 'No API access: daemon down, wrong token, or the app can\'t reach 127.0.0.1:1004. (' + detail + ')';
+      showApiBanner(msg);
+      const el = $('cfg_err');
+      if(el) el.textContent = msg;
+    }catch(_){ /* ignore */ }
+  }
+}
+
+tick();
+refreshCfg();
+
+let tickTimer = null;
+function startTicker(){
+  if(tickTimer) clearInterval(tickTimer);
+  const ms = document.hidden ? 5000 : 1200;
+  tickTimer = setInterval(tick, ms);
+}
+document.addEventListener('visibilitychange', startTicker);
+startTicker();
+
+// initial page
+setPage('status');
+updateExtColorsByMode();
+</script>
+
+</body>
+</html>
