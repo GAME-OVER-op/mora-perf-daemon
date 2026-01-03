@@ -43,7 +43,8 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, path: PathBuf) {
                 last_mtime = None;
             }
 
-            thread::sleep(Duration::from_millis(1000));
+            // Config changes are rare; poll a bit slower to reduce wakeups.
+            thread::sleep(Duration::from_millis(1500));
         }
     });
 }

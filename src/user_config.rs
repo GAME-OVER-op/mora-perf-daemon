@@ -4,6 +4,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -11,6 +12,13 @@ pub const CONFIG_PATH: &str = "/data/adb/modules/mora_perf_deamon/config/config.
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserConfig {
+    /// Static API token used by local clients (Android app) to access /api/* endpoints.
+    ///
+    /// Web UI routes are disabled; unauthenticated requests will get an empty 404 response.
+    /// If this field is missing or empty, the daemon will generate one and persist it.
+    #[serde(default)]
+    pub api_token: String,
+
     #[serde(default)]
     pub charging: ChargingConfig,
     pub notifications: NotificationsConfig,
@@ -24,6 +32,7 @@ pub struct UserConfig {
 impl Default for UserConfig {
     fn default() -> Self {
         Self {
+            api_token: String::new(),
             charging: ChargingConfig::default(),
             notifications: NotificationsConfig::default(),
             fan_led: FanLedDefaults::default(),
@@ -46,7 +55,7 @@ pub struct ChargingConfig {
     pub fan_led: Option<FanLedSetting>,
 
     /// Optional External LED setting for charging (usually disabled).
-    /// If both fan_led and external_led are set, external has priority.
+    /// If both fan_led and external_led are set, both will be applied (full_rgb.sh logic).
     #[serde(default)]
     pub external_led: Option<ExternalLedSetting>,
 
@@ -88,7 +97,49 @@ impl UserConfig {
             self.profiles.push(ProfileConfig::gaming_default());
         }
 
+        // Normalize LED modes to the subset that actually works on this firmware.
+        // (UI only exposes supported values, but config files may contain older ones.)
+        self.normalize_leds();
+
         Ok(())
+    }
+
+    fn normalize_leds(&mut self) {
+        // charging
+        if let Some(ref mut s) = self.charging.fan_led {
+            s.mode = normalize_fan_mode(s.mode);
+        }
+        if let Some(ref mut s) = self.charging.external_led {
+            s.mode = normalize_external_mode(s.mode);
+        }
+
+        // notifications
+        self.notifications.external_led.mode = normalize_external_mode(self.notifications.external_led.mode);
+
+        // profiles
+        for p in &mut self.profiles {
+            if let Some(ref mut s) = p.fan_led {
+                s.mode = normalize_fan_mode(s.mode);
+            }
+            if let Some(ref mut s) = p.external_led {
+                s.mode = normalize_external_mode(s.mode);
+            }
+        }
+    }
+}
+
+fn normalize_external_mode(m: ExternalLedMode) -> ExternalLedMode {
+    // Supported: steady/breathe/flashing
+    match m {
+        ExternalLedMode::Static | ExternalLedMode::Breath | ExternalLedMode::Blink => m,
+        _ => ExternalLedMode::Static,
+    }
+}
+
+fn normalize_fan_mode(m: FanLedMode) -> FanLedMode {
+    // Supported: flow/steady/flashing/breathe (+ off)
+    match m {
+        FanLedMode::Off | FanLedMode::Flow | FanLedMode::Breath | FanLedMode::Blink | FanLedMode::Static => m,
     }
 }
 
@@ -146,7 +197,7 @@ impl Default for FanLedDefaults {
     fn default() -> Self {
         Self {
             default_mode: FanLedMode::Static,
-            default_color: FanLedColor::White,
+            default_color: FanLedColor::Mixed7,
             extra: BTreeMap::new(),
         }
     }
@@ -194,6 +245,8 @@ pub enum ExternalLedColor {
     Cyan,
     White,
     Purple,
+    Pink,
+    Orange,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -206,7 +259,7 @@ impl Default for FanLedSetting {
     fn default() -> Self {
         Self {
             mode: FanLedMode::Static,
-            color: FanLedColor::White,
+            color: FanLedColor::Mixed7,
         }
     }
 }
@@ -254,7 +307,7 @@ pub enum FanLedColor {
     #[serde(rename = "mixed_6")]
     Mixed6,
     #[serde(rename = "mixed_7", alias = "white")]
-    White,
+    Mixed7,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -271,7 +324,7 @@ pub struct ProfileConfig {
     pub fan_led: Option<FanLedSetting>,
 
     /// Optional external LED setting for the profile.
-    /// If both fan_led and external_led are set, external has priority.
+    /// If both fan_led and external_led are set, both will be applied (full_rgb.sh logic).
     #[serde(default)]
     pub external_led: Option<ExternalLedSetting>,
 
@@ -288,7 +341,7 @@ impl ProfileConfig {
             enabled: true,
             fan_led: Some(FanLedSetting {
                 mode: FanLedMode::Off,
-                color: FanLedColor::White,
+                color: FanLedColor::Mixed7,
             }),
             external_led: None,
             extra: BTreeMap::new(),
@@ -332,26 +385,52 @@ pub fn load_or_init(path: &Path) -> UserConfig {
             Ok(mut cfg) => {
                 if let Err(e) = cfg.validate_and_normalize() {
                     eprintln!("CFG: invalid config: {} (reset to default)", e);
-                    let def = UserConfig::default();
+                    let mut def = UserConfig::default();
+                    let _ = ensure_api_token(&mut def);
                     let _ = write_config_atomic(path, &def);
                     def
                 } else {
+                    // Ensure token exists; persist if we generated it.
+                    if ensure_api_token(&mut cfg).unwrap_or(false) {
+                        let _ = write_config_atomic(path, &cfg);
+                    }
                     cfg
                 }
             }
             Err(e) => {
                 eprintln!("CFG: failed to parse config: {} (reset to default)", e);
-                let def = UserConfig::default();
+                let mut def = UserConfig::default();
+                let _ = ensure_api_token(&mut def);
                 let _ = write_config_atomic(path, &def);
                 def
             }
         },
         Err(_) => {
-            let def = UserConfig::default();
+            let mut def = UserConfig::default();
+            let _ = ensure_api_token(&mut def);
             let _ = write_config_atomic(path, &def);
             def
         }
     }
+}
+
+fn ensure_api_token(cfg: &mut UserConfig) -> io::Result<bool> {
+    if !cfg.api_token.trim().is_empty() {
+        return Ok(false);
+    }
+
+    // Generate a stable token (hex) from /dev/urandom. Rooted environment guarantees access.
+    let mut f = fs::File::open("/dev/urandom")?;
+    let mut buf = [0u8; 32];
+    f.read_exact(&mut buf)?;
+
+    let mut out = String::with_capacity(buf.len() * 2);
+    for b in buf {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    cfg.api_token = out;
+    Ok(true)
 }
 
 pub fn write_config_atomic(path: &Path, cfg: &UserConfig) -> io::Result<()> {

@@ -40,7 +40,7 @@ use crate::{
     gpu::read_gpu_util_any,
     leds::Leds,
     notify::{ensure_icon_on_disk, post_notification},
-    profiles::{select_active_mode_profile, select_base_led, BaseLedDesired},
+    profiles::{select_active_mode_profile, select_base_led},
     power::ChargeProbe,
     procwatch::ProcWatch,
     screen::{detect_screen_probe, raw_screen_on},
@@ -100,22 +100,18 @@ fn main() {
     {
         let cfg = { shared.read().unwrap().config.clone() };
         let prof = select_active_mode_profile(&cfg, false);
-        let led_sel = select_base_led(&cfg, true, false, false);
+                let led_sel = select_base_led(&cfg, true, false, false);
 
-        let desired = match led_sel.desired {
-            Some(BaseLedDesired::Fan(s)) => Some(crate::leds::DesiredEffect::Fan(s)),
-            Some(BaseLedDesired::External(s)) => Some(crate::leds::DesiredEffect::External(s)),
-            None => None,
-        };
-        leds.set_base_desired(desired);
+        leds.set_fan_desired(led_sel.fan.clone());
+        leds.set_external_desired(led_sel.external.clone());
 
-        let (des, last) = leds.get_base_state();
         let (fan_des, fan_last) = leds.get_fan_state();
-        let mut s = shared.write().unwrap();
+        let (ext_des, ext_last) = leds.get_external_state();
+let mut s = shared.write().unwrap();
         s.info.active_profile = prof.name;
         s.info.led_profile = led_sel.source;
-        s.leds.base_desired = des;
-        s.leds.base_last_applied = last;
+        s.leds.base_external_desired = ext_des;
+        s.leds.base_external_last_applied = ext_last;
         s.leds.fan_desired = fan_des;
         s.leds.fan_last_applied = fan_last;
     }
@@ -240,6 +236,10 @@ fn main() {
 
     let mut last_loop = Instant::now();
     let mut stable_for = Duration::ZERO;
+
+    // Cache config and only clone when it changes (config_watch bumps config_rev).
+    let mut cfg_cache = { shared.read().unwrap().config.clone() };
+    let mut cfg_rev_cache = { shared.read().unwrap().config_rev };
 
     loop {
         let now = Instant::now();
@@ -394,8 +394,15 @@ fn main() {
             }
         }
 
-        // Read latest config once per loop.
-        let cfg = { shared.read().unwrap().config.clone() };
+        // Read config only when it changed.
+        {
+            let s = shared.read().unwrap();
+            if s.config_rev != cfg_rev_cache {
+                cfg_cache = s.config.clone();
+                cfg_rev_cache = s.config_rev;
+            }
+        }
+        let cfg = &cfg_cache;
 
         // charging config switch (defaults to ON)
         let charging_enabled = cfg.charging.enabled;
@@ -404,19 +411,14 @@ fn main() {
         // ------------------------------
         // Profile/LED selection
         // ------------------------------
-        let active_prof = select_active_mode_profile(&cfg, game_mode);
-        let led_sel = select_base_led(&cfg, screen_on, charging_effective, game_mode);
-        let desired = match led_sel.desired {
-            Some(BaseLedDesired::Fan(s)) => Some(crate::leds::DesiredEffect::Fan(s)),
-            Some(BaseLedDesired::External(s)) => Some(crate::leds::DesiredEffect::External(s)),
-            None => None,
-        };
-        leds.set_base_desired(desired);
+        let active_prof = select_active_mode_profile(cfg, game_mode);
+                let led_sel = select_base_led(cfg, screen_on, charging_effective, game_mode);
+        leds.set_fan_desired(led_sel.fan.clone());
+        leds.set_external_desired(led_sel.external.clone());
 
-        let (base_des, base_last) = leds.get_base_state();
         let (fan_des, fan_last) = leds.get_fan_state();
-
-        // fan
+        let (ext_des, ext_last) = leds.get_external_state();
+// fan
         if let Some(f) = fan.as_mut() {
             let soc = soc_temp_mc.unwrap_or(-1);
             f.apply(&mut cache_u64, soc, batt_temp_mc, screen_on, charging_effective, game_mode);
@@ -516,8 +518,8 @@ fn main() {
             // Profiles / LED state (updated continuously)
             st.info.active_profile = active_prof.name.clone();
             st.info.led_profile = led_sel.source.clone();
-            st.leds.base_desired = base_des.clone();
-            st.leds.base_last_applied = base_last.clone();
+            st.leds.base_external_desired = ext_des.clone();
+            st.leds.base_external_last_applied = ext_last.clone();
             st.leds.fan_desired = fan_des;
             st.leds.fan_last_applied = fan_last;
         }
@@ -529,13 +531,13 @@ fn main() {
             TempZone::Z120 | TempZone::Z130 => 450,
             _ => {
                 if idle_mode {
-                    4500
+                    6500
                 } else if any_write || any_step {
-                    700
-                } else if stable_for >= Duration::from_secs(20) {
-                    2000
+                    750
+                } else if stable_for >= Duration::from_secs(30) {
+                    3000
                 } else {
-                    1200
+                    1500
                 }
             }
         };

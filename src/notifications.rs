@@ -35,12 +35,10 @@ fn pkg_from_line(line: &str) -> Option<&str> {
     line.split('|').nth(1)
 }
 
-fn run_notification_list() -> Result<String, String> {
-    let cmd = cmd_bin();
-    let su = su_bin();
+fn run_notification_list(cmd: &str, su: &str) -> Result<String, String> {
 
     // 1) Preferred (tested): shell UID 2000
-    let out = Command::new(&su)
+    let out = Command::new(su)
         .args(["-lp", "2000", "-c", &format!("{} notification list", cmd)])
         .output();
     if let Ok(out) = out {
@@ -50,30 +48,30 @@ fn run_notification_list() -> Result<String, String> {
     }
 
     // 2) Direct call
-    let out = Command::new(&cmd)
+    let out = Command::new(cmd)
         .args(["notification", "list"])
         .output()
-        .map_err(|e| format!("Не удалось запустить cmd: {e}"))?;
+        .map_err(|e| format!("Failed to run cmd: {e}"))?;
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).to_string());
     }
 
     // 3) Plain su
-    let out = Command::new(&su)
+    let out = Command::new(su)
         .args(["-c", &format!("{} notification list", cmd)])
         .output()
-        .map_err(|e| format!("Не удалось запустить su: {e}"))?;
+        .map_err(|e| format!("Failed to run su: {e}"))?;
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).to_string());
     }
 
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    Err(format!("Команда вернула ошибку (code={code}): {stderr}"))
+    Err(format!("Command failed (code={code}): {stderr}"))
 }
 
-fn snapshot() -> Result<HashSet<String>, String> {
-    let out = run_notification_list()?;
+fn snapshot(cmd: &str, su: &str) -> Result<HashSet<String>, String> {
+    let out = run_notification_list(cmd, su)?;
     let mut set = HashSet::new();
     for line in out.lines() {
         let line = line.trim();
@@ -95,7 +93,10 @@ enum ScenarioStop {
 /// Notification watcher: any newly appeared notification triggers external LED scenario.
 pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
     thread::spawn(move || {
-        let mut prev = match snapshot() {
+        let cmd = cmd_bin();
+        let su = su_bin();
+
+        let mut prev = match snapshot(&cmd, &su) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("NOTIF: initial snapshot error: {}", e);
@@ -109,16 +110,34 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
 
         // throttle error logs
         let mut last_err_at = Instant::now() - Duration::from_secs(3600);
+        let mut last_disabled_sync = Instant::now() - Duration::from_secs(3600);
 
         loop {
-            thread::sleep(Duration::from_millis(1000));
-
-            let (cfg, screen_on) = {
+            // Read only what we need from shared state/config.
+            let (enabled, stop_kind_cfg, for_seconds, ext_setting, screen_on) = {
                 let s = shared.read().unwrap();
-                (s.config.clone(), s.info.screen_on)
+                let n = &s.config.notifications;
+                (
+                    n.enabled,
+                    n.stop_condition.kind,
+                    n.for_seconds.max(1),
+                    n.external_led.clone(),
+                    s.info.screen_on,
+                )
             };
 
-            if !cfg.notifications.enabled {
+            // If screen became ON and stop=until_screen_on -> stop.
+            if active && screen_on && matches!(stop_kind_cfg, NotificationsStopKind::UntilScreenOn) {
+                leds.external_stop();
+                active = false;
+                ends_at = None;
+                let mut s = shared.write().unwrap();
+                s.leds.external_active = false;
+                s.leds.external_ends_at = None;
+                s.leds.external_started_at = None;
+            }
+
+            if !enabled {
                 if active {
                     leds.external_stop();
                     active = false;
@@ -128,14 +147,21 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
                     s.leds.external_ends_at = None;
                     s.leds.external_started_at = None;
                 }
-                // keep snapshot in sync to avoid immediate retrigger when re-enabled
-                if let Ok(s) = snapshot() {
-                    prev = s;
+
+                // Keep snapshot in sync to avoid immediate retrigger when re-enabled,
+                // but do it rarely to save power.
+                if last_disabled_sync.elapsed() > Duration::from_secs(10) {
+                    if let Ok(snap) = snapshot(&cmd, &su) {
+                        prev = snap;
+                    }
+                    last_disabled_sync = Instant::now();
                 }
+
+                thread::sleep(Duration::from_millis(5000));
                 continue;
             }
 
-            match snapshot() {
+            match snapshot(&cmd, &su) {
                 Ok(cur) => {
                     let mut new_found = false;
                     for line in cur.difference(&prev) {
@@ -146,37 +172,32 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
 
                     if new_found {
                         // restart scenario
-                        let stop = match cfg.notifications.stop_condition.kind {
+                        stop_kind = match stop_kind_cfg {
                             NotificationsStopKind::UntilScreenOn => ScenarioStop::UntilScreenOn,
                             NotificationsStopKind::ForSeconds => ScenarioStop::ForSeconds,
                         };
 
                         let now = Instant::now();
-                        stop_kind = stop;
-
-                        let n = cfg.notifications.for_seconds.max(1);
                         let end = if screen_on {
-                            Some(now + Duration::from_secs(n))
+                            Some(now + Duration::from_secs(for_seconds))
                         } else {
                             match stop_kind {
                                 ScenarioStop::UntilScreenOn => None,
-                                ScenarioStop::ForSeconds => Some(now + Duration::from_secs(n)),
+                                ScenarioStop::ForSeconds => Some(now + Duration::from_secs(for_seconds)),
                             }
                         };
 
-                        let ext = cfg.notifications.external_led.clone();
-                        if let Err(e) = leds.external_start(ext.clone()) {
+                        if let Err(e) = leds.external_start(ext_setting.clone()) {
                             eprintln!("LED: external_start error: {}", e);
                         }
 
                         active = true;
                         ends_at = end;
-
                         {
                             let mut s = shared.write().unwrap();
                             s.leds.external_active = true;
-                            s.leds.external_setting = Some(ext);
-                            s.leds.external_stop_kind = cfg.notifications.stop_condition.kind;
+                            s.leds.external_setting = Some(ext_setting.clone());
+                            s.leds.external_stop_kind = stop_kind_cfg;
                             s.leds.external_started_at = Some(now);
                             s.leds.external_ends_at = end;
                         }
@@ -215,22 +236,9 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
                 }
             }
 
-            // If screen became ON and stop=until_screen_on -> stop.
-            if active {
-                let (screen_on, stop_kind_cfg) = {
-                    let s = shared.read().unwrap();
-                    (s.info.screen_on, s.leds.external_stop_kind)
-                };
-                if screen_on && matches!(stop_kind_cfg, NotificationsStopKind::UntilScreenOn) {
-                    leds.external_stop();
-                    active = false;
-                    ends_at = None;
-                    let mut s = shared.write().unwrap();
-                    s.leds.external_active = false;
-                    s.leds.external_ends_at = None;
-                    s.leds.external_started_at = None;
-                }
-            }
+            // Poll interval (save power when screen is ON).
+            let ms = if screen_on { 3500 } else { 1000 };
+            thread::sleep(Duration::from_millis(ms));
         }
     });
 }

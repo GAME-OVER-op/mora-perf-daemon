@@ -1,10 +1,10 @@
-use crate::{leds::DesiredEffect, user_config::{ExternalLedSetting, FanLedSetting, NotificationsStopKind, UserConfig}};
+use crate::user_config::{ExternalLedSetting, FanLedSetting, NotificationsStopKind, UserConfig};
 use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub struct LedRuntimeState {
-    pub base_desired: Option<DesiredEffect>,
-    pub base_last_applied: Option<DesiredEffect>,
+    pub base_external_desired: Option<ExternalLedSetting>,
+    pub base_external_last_applied: Option<ExternalLedSetting>,
 
     pub fan_desired: Option<FanLedSetting>,
     pub fan_last_applied: Option<FanLedSetting>,
@@ -19,8 +19,8 @@ pub struct LedRuntimeState {
 impl Default for LedRuntimeState {
     fn default() -> Self {
         Self {
-            base_desired: None,
-            base_last_applied: None,
+            base_external_desired: None,
+            base_external_last_applied: None,
             fan_desired: None,
             fan_last_applied: None,
             external_active: false,

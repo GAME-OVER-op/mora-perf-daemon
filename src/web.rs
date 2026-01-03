@@ -20,47 +20,73 @@ const BIND_ADDR: &str = "127.0.0.1:1004";
 // User will replace this later. We ship a placeholder so the project compiles.
 const RED_PNG: &[u8] = include_bytes!("assets/red.png");
 
-// UI layout/styling adapted from user-provided index1.html (structure + cards + sidebar).
-// Logic is implemented here.
+// UI layout/styling uses device-like palette (black/red/yellow/blue)
+// based on the user's provided `script/index.html`.
 const STYLE: &str = r#"
-:root {
-  --primary-color: #3a86ff;
-  --primary-color-rgb: 58,134,255;
-  --surface: #ffffff;
-  --background: #f8f9fa;
-  --text-primary: #212529;
-  --text-secondary: #495057;
-  --muted: #6c757d;
-  --border: #e9ecef;
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow: 0 6px 18px rgba(0,0,0,0.08);
+:root{
+  --bg:#050506;
+  --surface: rgba(12,12,16,.78);
+  --surface2: rgba(12,12,16,.58);
+  --border: rgba(255,255,255,.08);
+  --borderHot: rgba(255,100,120,.18);
+
+  --text-primary: rgba(245,245,250,.92);
+  --text-secondary: rgba(245,245,250,.74);
+  --muted: rgba(245,245,250,.62);
+
+  --accent-red: #ff3b5c;
+  --accent-red-rgb: 255,59,92;
+  --accent-blue: #3a86ff;
+  --accent-blue-rgb: 58,134,255;
+  --accent-yellow: #ffd86b;
+  --accent-yellow-rgb: 255,216,107;
+
+  --primary-color: var(--accent-red);
+  --primary-color-rgb: var(--accent-red-rgb);
+
+  --radius: 22px;
+  --radius-sm: 14px;
+  --shadow: 0 18px 60px rgba(0,0,0,.55);
   --sidebar-compact-width: 64px;
   --sidebar-full-width: 280px;
-  --transition: 300ms cubic-bezier(.2,.9,.2,1);
+  --transition: 260ms cubic-bezier(.2,.9,.2,1);
 }
 
-[data-theme="dark"] {
-  --surface: #1e1e1e;
-  --background: #0f1113;
-  --text-primary: #f1f3f5;
-  --text-secondary: #ced4da;
-  --muted: #adb5bd;
-  --border: #2a2a2a;
+[data-theme="light"]{
+  --bg:#f6f7f9;
+  --surface: rgba(255,255,255,.92);
+  --surface2: rgba(255,255,255,.70);
+  --border: rgba(0,0,0,.10);
+  --borderHot: rgba(255,59,92,.18);
+  --text-primary: rgba(10,12,14,.92);
+  --text-secondary: rgba(10,12,14,.72);
+  --muted: rgba(10,12,14,.55);
+  --shadow: 0 18px 60px rgba(0,0,0,.14);
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+*{ box-sizing:border-box; margin:0; padding:0; }
+html,body{ height:100%; }
 
-body {
+body{
   font-family: Inter, Segoe UI, Roboto, system-ui;
-  background: var(--background);
+  background: var(--bg);
   color: var(--text-primary);
-  min-height: 100vh;
-  overflow-x: hidden;
-  line-height: 1.5;
+  overflow-x:hidden;
+  line-height:1.5;
 }
 
-.app-container { display:flex; min-height:100vh; width:100%; }
+/* Background paints */
+.bg{
+  position: fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(1100px 800px at 18% 8%, rgba(var(--accent-red-rgb),.10), transparent 62%),
+    radial-gradient(900px 700px at 82% 0%, rgba(255,107,125,.08), transparent 58%),
+    radial-gradient(1100px 900px at 62% 92%, rgba(var(--accent-yellow-rgb),.07), transparent 62%),
+    radial-gradient(900px 700px at 80% 84%, rgba(var(--accent-blue-rgb),.06), transparent 60%),
+    var(--bg);
+}
+
+.app-container{ position:relative; z-index:1; display:flex; min-height:100vh; width:100%; }
 
 .sidebar {
   position: fixed; left:0; top:0; height:100vh; z-index:1000;
@@ -70,6 +96,7 @@ body {
   background: var(--surface);
   border-right: 1px solid var(--border);
   box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
   overflow-x:hidden; overflow-y:auto;
 }
 
@@ -83,13 +110,13 @@ body {
 }
 
 .logo{
-  width:44px; height:44px; border-radius:10px;
-  background: linear-gradient(135deg, var(--primary-color), #8338ec);
+  width:44px; height:44px; border-radius:12px;
   display:flex; align-items:center; justify-content:center;
   flex-shrink:0; overflow:hidden;
+  background: transparent; /* no colorful frame */
 }
 
-.logo img{ width: 30px; height: 30px; object-fit: contain; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.25)); }
+.logo img{ width: 34px; height: 34px; object-fit: contain; filter: none; }
 
 .title-wrap{ overflow:hidden; flex:1; }
 .title{ font-weight:600; font-size:1.1rem; white-space:nowrap; opacity:0; transform: translateX(-8px);
@@ -108,6 +135,7 @@ body {
   cursor:pointer; box-shadow: 0 4px 20px rgba(58,134,255,0.30);
   transition: all var(--transition);
 }
+.hamburger{ box-shadow: 0 10px 30px rgba(var(--primary-color-rgb),0.28); }
 .hamburger.hidden{ opacity:0; transform: scale(0); pointer-events:none; }
 
 .nav{ padding:16px; display:flex; flex-direction:column; gap:8px; flex:1; }
@@ -117,7 +145,7 @@ body {
   transition: background var(--transition), transform var(--transition);
 }
 .nav-item:hover{ background: rgba(var(--primary-color-rgb), 0.10); transform: translateX(2px); }
-.nav-item.active{ background: rgba(var(--primary-color-rgb), 0.15); }
+.nav-item.active{ background: rgba(var(--primary-color-rgb), 0.16); border: 1px solid rgba(var(--primary-color-rgb),0.24); }
 .nav-item .ico{ width:28px; text-align:center; font-size: 1.1rem; flex-shrink:0; }
 .nav-item span{
   white-space: nowrap; opacity:0; transform: translateX(-6px);
@@ -134,11 +162,11 @@ body {
 .sidebar.open .toggle-label{ opacity:1; transform:none; }
 .theme-toggle{
   width:44px; height:24px; border-radius:999px;
-  background: rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.08);
   border: 1px solid var(--border);
   position: relative; cursor:pointer; flex-shrink:0;
 }
-[data-theme="dark"] .theme-toggle{ background: rgba(255,255,255,0.08); }
+[data-theme="light"] .theme-toggle{ background: rgba(0,0,0,0.08); }
 .theme-toggle::after{
   content:""; width:18px; height:18px; border-radius:50%;
   position:absolute; left:2px; top:2px;
@@ -195,7 +223,7 @@ body {
 .row{ display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
 label{ display:block; font-size: 0.80rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 select,input{
-  background: transparent;
+  background: var(--surface2);
   color: var(--text-primary);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -214,8 +242,9 @@ button{
 }
 button:hover{ background: rgba(var(--primary-color-rgb), 0.20); }
 .hint{ color: var(--muted); font-size: 0.90rem; }
-.badge{ display:inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border);
-  background: rgba(0,0,0,0.03); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+.badge{ display:inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--borderHot);
+  background: rgba(var(--primary-color-rgb),0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 0.85rem;
 }
 "#;
@@ -234,6 +263,62 @@ fn bad(code: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     Response::from_string(msg).with_status_code(StatusCode(code))
 }
 
+fn empty_404() -> Response<std::io::Cursor<Vec<u8>>> {
+    Response::from_data(Vec::<u8>::new()).with_status_code(StatusCode(404))
+}
+
+// tiny_http's HeaderField::equiv expects a `&'static str`.
+// We only query a fixed set of well-known headers, so keep this API static.
+fn header_value(req: &tiny_http::Request, name: &'static str) -> Option<String> {
+    req.headers()
+        .iter()
+        .find(|h| h.field.equiv(name))
+        // tiny_http stores header values as AsciiString; normalize to String.
+        .map(|h| h.value.to_string())
+}
+
+/// Authorization model:
+/// - Only /api/* endpoints exist.
+/// - Requests must include a valid token.
+/// - If token is missing/invalid, we respond with an empty 404 (so opening the port in a browser shows nothing).
+///
+/// Supported headers:
+/// - Authorization: Bearer <token>
+/// - X-Api-Key: <token>
+fn is_authorized(req: &tiny_http::Request, shared: &Arc<RwLock<SharedState>>) -> bool {
+    let token = { shared.read().unwrap().config.api_token.clone() };
+    if token.trim().is_empty() {
+        // Token must exist (it should be auto-generated & persisted on config load).
+        // If it doesn't, deny access and return an empty 404 to keep the port "dark".
+        return false;
+    }
+
+    if let Some(v) = header_value(req, "Authorization") {
+        let v = v.trim();
+        if v == token {
+            return true;
+        }
+        if let Some(rest) = v.strip_prefix("Bearer ") {
+            if rest.trim() == token {
+                return true;
+            }
+        }
+        if let Some(rest) = v.strip_prefix("Token ") {
+            if rest.trim() == token {
+                return true;
+            }
+        }
+    }
+
+    if let Some(v) = header_value(req, "X-Api-Key") {
+        if v.trim() == token {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn read_body(req: &mut tiny_http::Request) -> Vec<u8> {
     let mut buf = Vec::new();
     let _ = req.as_reader().read_to_end(&mut buf);
@@ -242,7 +327,6 @@ fn read_body(req: &mut tiny_http::Request) -> Vec<u8> {
 
 fn build_state_json(shared: &Arc<RwLock<SharedState>>) -> Value {
     let s = shared.read().unwrap();
-    let cfg = &s.config;
 
     let to_c = |mc: Option<i32>| mc.map(|v| (v as f64) / 1000.0);
 
@@ -255,24 +339,6 @@ fn build_state_json(shared: &Arc<RwLock<SharedState>>) -> Value {
             0
         }
     });
-
-    let base_json = |e: &Option<crate::leds::DesiredEffect>| -> Value {
-        match e {
-            Some(crate::leds::DesiredEffect::Fan(f)) => json!({"kind":"fan","mode":f.mode,"color":f.color}),
-            Some(crate::leds::DesiredEffect::External(x)) => json!({"kind":"external","mode":x.mode,"color":x.color}),
-            None => json!({"kind":"off"}),
-        }
-    };
-
-    // Minimal editable config for UI.
-    let normal = cfg
-        .profiles
-        .iter()
-        .find(|p| matches!(p.profile_type, ProfileType::Normal) || p.name.eq_ignore_ascii_case("Normal"));
-    let gaming = cfg
-        .profiles
-        .iter()
-        .find(|p| matches!(p.profile_type, ProfileType::Gaming) || p.name.eq_ignore_ascii_case("Gaming"));
 
     json!({
         "temps": {
@@ -296,8 +362,8 @@ fn build_state_json(shared: &Arc<RwLock<SharedState>>) -> Value {
         "active_profile": s.info.active_profile.clone(),
         "led_profile": s.info.led_profile.clone(),
         "leds": {
-            "base_desired": base_json(&s.leds.base_desired),
-            "base_last_applied": base_json(&s.leds.base_last_applied),
+            "base_external_desired": s.leds.base_external_desired.clone(),
+            "base_external_last_applied": s.leds.base_external_last_applied.clone(),
             "fan_desired": s.leds.fan_desired.clone(),
             "fan_last_applied": s.leds.fan_last_applied.clone(),
             "external": {
@@ -311,25 +377,13 @@ fn build_state_json(shared: &Arc<RwLock<SharedState>>) -> Value {
             "VmRSS_kb": read_vmrss_kb()
         },
         "config_rev": s.config_rev,
-        "last_config_error": s.last_config_error.clone(),
-        "cfg": {
-            "charging": {
-                "enabled": cfg.charging.enabled,
-                "fan_led": cfg.charging.fan_led.clone(),
-                "external_led": cfg.charging.external_led.clone()
-            },
-            "notifications": cfg.notifications.clone(),
-            "profiles": {
-                "normal": normal.map(|p| json!({"enabled":p.enabled,"fan_led":p.fan_led,"external_led":p.external_led})).unwrap_or_else(|| json!({"enabled":true,"fan_led":null,"external_led":null})),
-                "gaming": gaming.map(|p| json!({"enabled":p.enabled,"fan_led":p.fan_led,"external_led":p.external_led})).unwrap_or_else(|| json!({"enabled":true,"fan_led":null,"external_led":null}))
-            }
-        }
+        "last_config_error": s.last_config_error.clone()
     })
 }
 
 fn page_app() -> String {
     let html = r#"<!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5" />
@@ -337,22 +391,23 @@ fn page_app() -> String {
   <style>#STYLE#</style>
 </head>
 <body>
+<div class="bg"></div>
 <div class="app-container">
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div class="logo"><img src="/assets/red.png" alt="" /></div>
       <div class="title-wrap">
         <div class="title">mora</div>
-        <div class="subtitle">панель статусов</div>
+        <div class="subtitle">status panel</div>
       </div>
     </div>
     <div class="nav">
-      <a class="nav-item active" id="nav_status"><div class="ico">●</div><span>Статус</span></a>
-      <a class="nav-item" id="nav_profiles"><div class="ico">●</div><span>Профили</span></a>
+      <a class="nav-item active" id="nav_status"><div class="ico">●</div><span>Status</span></a>
+      <a class="nav-item" id="nav_profiles"><div class="ico">●</div><span>Profiles</span></a>
     </div>
     <div class="sidebar-footer">
       <div class="toggle-row">
-        <div class="toggle-label">Тема</div>
+        <div class="toggle-label">Theme</div>
         <div class="theme-toggle" id="theme_toggle" title="theme"></div>
       </div>
       <div style="margin-top:12px" class="hint" id="cfg_err"></div>
@@ -365,15 +420,15 @@ fn page_app() -> String {
     <section id="section_status">
       <div class="page-title">
         <div>
-          <h1>Статус</h1>
-          <p>данные обновляются в реальном времени</p>
+          <h1>Status</h1>
+          <p>updates in real time</p>
         </div>
         <div class="badge" id="badge_profile">?</div>
       </div>
 
       <div class="grid">
         <div class="card" style="grid-column: span 4;">
-          <h2>Температуры</h2>
+          <h2>Temperatures</h2>
           <div class="kv"><div class="k">CPU avg</div><div class="v" id="t_cpu">?</div></div>
           <div class="kv"><div class="k">GPU avg</div><div class="v" id="t_gpu">?</div></div>
           <div class="kv"><div class="k">SOC</div><div class="v" id="t_soc">?</div></div>
@@ -381,7 +436,7 @@ fn page_app() -> String {
         </div>
 
         <div class="card" style="grid-column: span 4;">
-          <h2>Состояния</h2>
+          <h2>States</h2>
           <div class="kv"><div class="k">Zone</div><div class="v" id="st_zone">?</div></div>
           <div class="kv"><div class="k">Reduce</div><div class="v" id="st_reduce">?</div></div>
           <div class="kv"><div class="k">Screen</div><div class="v" id="st_screen">?</div></div>
@@ -392,7 +447,7 @@ fn page_app() -> String {
         </div>
 
         <div class="card" style="grid-column: span 4;">
-          <h2>Подсветка / RAM</h2>
+          <h2>Lighting / RAM</h2>
           <div class="kv"><div class="k">Fan LED</div><div class="v" id="st_fan">?</div></div>
           <div class="kv"><div class="k">External LED</div><div class="v" id="st_ext">?</div></div>
           <div class="kv"><div class="k">VmRSS</div><div class="v" id="st_mem">?</div></div>
@@ -403,15 +458,15 @@ fn page_app() -> String {
     <section id="section_profiles" style="display:none;">
       <div class="page-title">
         <div>
-          <h1>Профили</h1>
-          <p>включение/выключение и параметры</p>
+          <h1>Profiles</h1>
+          <p>enable/disable and parameters</p>
         </div>
         <div class="hint" id="save_msg"></div>
       </div>
 
       <div class="grid">
         <div class="card" style="grid-column: span 6;">
-          <h2>Зарядка</h2>
+          <h2>Charging</h2>
           <div class="row">
             <div>
               <label>Enabled</label>
@@ -433,10 +488,10 @@ fn page_app() -> String {
               <label>Mode</label>
               <select id="c_fan_mode">
                 <option value="off">off</option>
-                <option value="steady">steady</option>
+                <option value="flow">flow</option>
                 <option value="breathe">breathe</option>
                 <option value="flashing">flashing</option>
-                <option value="flow">flow</option>
+                <option value="steady">steady</option>
               </select>
             </div>
             <div>
@@ -459,11 +514,11 @@ fn page_app() -> String {
               </select>
             </div>
           </div>
-          <div class="hint" style="margin-top:10px;">Отключение делает поведение как будто зарядки нет.</div>
+          <div class="hint" style="margin-top:10px;">Turning this OFF makes it behave as if charging is not connected.</div>
         </div>
 
         <div class="card" style="grid-column: span 6;">
-          <h2>Уведомления → внешняя подсветка</h2>
+          <h2>Notifications → external LED</h2>
           <div class="row">
             <div>
               <label>Enabled</label>
@@ -488,25 +543,24 @@ fn page_app() -> String {
             <div>
               <label>Mode</label>
               <select id="n_mode">
-                <option value="flashing">flashing</option>
                 <option value="steady">steady</option>
                 <option value="breathe">breathe</option>
-                <option value="flow">flow</option>
-                <option value="scintillation">scintillation</option>
-                <option value="sound">sound</option>
+                <option value="flashing">flashing</option>
               </select>
             </div>
             <div>
               <label>Color</label>
               <select id="n_color">
-                <option value="multi">multi</option>
                 <option value="red">red</option>
+                <option value="orange">orange</option>
                 <option value="yellow">yellow</option>
-                <option value="blue">blue</option>
                 <option value="green">green</option>
                 <option value="cyan">cyan</option>
-                <option value="white">white</option>
+                <option value="blue">blue</option>
                 <option value="purple">purple</option>
+                <option value="pink">pink</option>
+                <option value="multi" style="display:none">multi</option>
+                <option value="white" style="display:none">white</option>
               </select>
             </div>
           </div>
@@ -542,10 +596,10 @@ fn page_app() -> String {
               <label>Fan Mode</label>
               <select id="p_n_mode">
                 <option value="off">off</option>
-                <option value="steady">steady</option>
+                <option value="flow">flow</option>
                 <option value="breathe">breathe</option>
                 <option value="flashing">flashing</option>
-                <option value="flow">flow</option>
+                <option value="steady">steady</option>
               </select>
             </div>
             <div>
@@ -572,25 +626,24 @@ fn page_app() -> String {
             <div>
               <label>Ext Mode</label>
               <select id="p_n_ext_mode">
-                <option value="flashing">flashing</option>
                 <option value="steady">steady</option>
                 <option value="breathe">breathe</option>
-                <option value="flow">flow</option>
-                <option value="scintillation">scintillation</option>
-                <option value="sound">sound</option>
+                <option value="flashing">flashing</option>
               </select>
             </div>
             <div>
               <label>Ext Color</label>
               <select id="p_n_ext_color">
-                <option value="multi">multi</option>
                 <option value="red">red</option>
+                <option value="orange">orange</option>
                 <option value="yellow">yellow</option>
-                <option value="blue">blue</option>
                 <option value="green">green</option>
                 <option value="cyan">cyan</option>
-                <option value="white">white</option>
+                <option value="blue">blue</option>
                 <option value="purple">purple</option>
+                <option value="pink">pink</option>
+                <option value="multi" style="display:none">multi</option>
+                <option value="white" style="display:none">white</option>
               </select>
             </div>
           </div>
@@ -626,10 +679,10 @@ fn page_app() -> String {
               <label>Fan Mode</label>
               <select id="p_g_mode">
                 <option value="off">off</option>
-                <option value="steady">steady</option>
+                <option value="flow">flow</option>
                 <option value="breathe">breathe</option>
                 <option value="flashing">flashing</option>
-                <option value="flow">flow</option>
+                <option value="steady">steady</option>
               </select>
             </div>
             <div>
@@ -656,25 +709,24 @@ fn page_app() -> String {
             <div>
               <label>Ext Mode</label>
               <select id="p_g_ext_mode">
-                <option value="flashing">flashing</option>
                 <option value="steady">steady</option>
                 <option value="breathe">breathe</option>
-                <option value="flow">flow</option>
-                <option value="scintillation">scintillation</option>
-                <option value="sound">sound</option>
+                <option value="flashing">flashing</option>
               </select>
             </div>
             <div>
               <label>Ext Color</label>
               <select id="p_g_ext_color">
-                <option value="multi">multi</option>
                 <option value="red">red</option>
+                <option value="orange">orange</option>
                 <option value="yellow">yellow</option>
-                <option value="blue">blue</option>
                 <option value="green">green</option>
                 <option value="cyan">cyan</option>
-                <option value="white">white</option>
+                <option value="blue">blue</option>
                 <option value="purple">purple</option>
+                <option value="pink">pink</option>
+                <option value="multi" style="display:none">multi</option>
+                <option value="white" style="display:none">white</option>
               </select>
             </div>
           </div>
@@ -691,6 +743,39 @@ const $ = (id)=>document.getElementById(id);
 const sidebar = $('sidebar');
 const overlay = $('overlay');
 const hamburger = $('hamburger');
+const extModeSel = $('p_n_ext_mode');
+const extColorSel = $('p_n_ext_color');
+
+function updateExtColorsByMode(){
+  if(!extModeSel || !extColorSel) return;
+  const mode = extModeSel.value;
+  const opts = Array.from(extColorSel.options);
+
+  // On this firmware:
+  // - steady/breathe: orange slot is not present (idx0/idx1 are red/violet)
+  // - flashing: red slot is not present (idx0/idx1 are orange/pink)
+  opts.forEach(o=>{
+    if(o.value==='orange'){
+      o.hidden = (mode!=='flashing');
+      o.style.display = o.hidden ? 'none' : '';
+    }
+    if(o.value==='red'){
+      o.hidden = (mode==='flashing');
+      o.style.display = o.hidden ? 'none' : '';
+    }
+  });
+
+  // If current selection became hidden, pick the first visible option
+  const cur = extColorSel.selectedOptions[0];
+  if(cur && (cur.hidden || cur.style.display==='none')){
+    const first = opts.find(o=>!(o.hidden || o.style.display==='none'));
+    if(first) extColorSel.value = first.value;
+  }
+}
+
+if(extModeSel){
+  extModeSel.addEventListener('change', updateExtColorsByMode);
+}
 
 function openSidebar(){ sidebar.classList.add('open'); overlay.classList.add('show'); }
 function closeSidebar(){ sidebar.classList.remove('open'); overlay.classList.remove('show'); }
@@ -816,21 +901,31 @@ function scheduleSave(){
 async function doSave(){
   if(saving) return;
   saving = true;
-  $('save_msg').textContent = 'saving...';
+  $('save_msg').textContent = 'Saving...';
   try{
     const payload = collectPayload();
     const r = await fetch('/api/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     const t = await r.text();
     if(!r.ok){
-      $('save_msg').textContent = 'error: ' + t;
+      $('save_msg').textContent = 'Error: ' + t;
     } else {
       $('save_msg').textContent = 'ok';
       setTimeout(()=>{ if($('save_msg').textContent==='ok') $('save_msg').textContent=''; }, 1000);
     }
   }catch(e){
-    $('save_msg').textContent = 'error: ' + String(e);
+    $('save_msg').textContent = 'Error: ' + String(e);
   }
   saving = false;
+}
+
+async function refreshCfg(){
+  try{
+    const r = await fetch('/api/config');
+    const cfg = await r.json();
+    applyCfg(cfg);
+  }catch(e){
+    // ignore
+  }
 }
 
 ['c_enabled','c_fan_enabled','c_fan_mode','c_fan_color',
@@ -863,20 +958,21 @@ async function tick(){
     $('st_ledprof').textContent = s.led_profile || '?';
     $('badge_profile').textContent = s.active_profile || '?';
 
-    const base = (s.leds && s.leds.base_desired) ? s.leds.base_desired : null;
+    const fanSt = (s.leds && s.leds.fan_last_applied) ? s.leds.fan_last_applied : null;
     let fan = 'off';
-    if(base && base.kind==='fan'){ fan = base.mode + ':' + base.color; }
+    if(fanSt){ fan = fanSt.mode + ':' + fanSt.color; }
     $('st_fan').textContent = fan;
 
     let ext = 'off';
-    // Notification override
+    // Notification override (OUT)
     if(s.leds && s.leds.external && s.leds.external.active){
       const st = s.leds.external.setting;
       const left = s.leds.external.ends_in_sec;
       ext = st ? (st.mode+':'+st.color) : 'active';
       if(left!==null && left!==undefined) ext += ' ('+left+'s)';
-    } else if(base && base.kind==='external') {
-      ext = base.mode + ':' + base.color;
+    } else {
+      const baseExt = (s.leds && s.leds.base_external_last_applied) ? s.leds.base_external_last_applied : null;
+      if(baseExt){ ext = baseExt.mode + ':' + baseExt.color; }
     }
     $('st_ext').textContent = ext;
     $('st_mem').textContent = (s.mem && s.mem.VmRSS_kb ? s.mem.VmRSS_kb : 0) + ' kB';
@@ -886,7 +982,7 @@ async function tick(){
 
     if(s.config_rev !== lastCfgRev){
       lastCfgRev = s.config_rev;
-      applyCfg(s.cfg);
+      await refreshCfg();
     }
   }catch(e){
     // ignore
@@ -894,10 +990,20 @@ async function tick(){
 }
 
 tick();
-setInterval(tick, 1000);
+refreshCfg();
+
+let tickTimer = null;
+function startTicker(){
+  if(tickTimer) clearInterval(tickTimer);
+  const ms = document.hidden ? 5000 : 1200;
+  tickTimer = setInterval(tick, ms);
+}
+document.addEventListener('visibilitychange', startTicker);
+startTicker();
 
 // initial page
 setPage('status');
+updateExtColorsByMode();
 </script>
 
 </body>
@@ -1024,6 +1130,18 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, _leds: Arc<crate::leds::Leds>, cf
             let url = req.url().to_string();
             let method = req.method().clone();
 
+            // API-only mode: everything except /api/* returns an empty 404.
+            if !url.starts_with("/api/") {
+                let _ = req.respond(empty_404());
+                continue;
+            }
+
+            // Require token-based auth for ALL API endpoints.
+            if !is_authorized(&req, &shared) {
+                let _ = req.respond(empty_404());
+                continue;
+            }
+
             let body = if matches!(method, Method::Post) {
                 read_body(&mut req)
             } else {
@@ -1031,26 +1149,21 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, _leds: Arc<crate::leds::Leds>, cf
             };
 
             let resp = match (method, url.as_str()) {
-                (Method::Get, "/") => ok_html(page_app()),
-                (Method::Get, "/status") => ok_html(page_app()),
-                (Method::Get, "/profiles") => ok_html(page_app()),
-                (Method::Get, "/assets/red.png") => {
-                    Response::from_data(RED_PNG.to_vec())
-                        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..]).unwrap())
-                        .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"max-age=3600"[..]).unwrap())
-                }
                 (Method::Get, "/api/state") => ok_json(build_state_json(&shared)),
+
+                // Read current effective config.
+                (Method::Get, "/api/config") => {
+                    let cfg = { shared.read().unwrap().config.clone() };
+                    ok_json(serde_json::to_value(cfg).unwrap_or_else(|_| json!({})))
+                }
+
+                // Save (UI/app) config changes.
                 (Method::Post, "/api/save") => match handle_api_save(&shared, &cfg_path, &body) {
                     Ok(_) => Response::from_string("ok"),
                     Err(e) => bad(400, &e),
                 },
 
-                // Backwards-compatible read endpoint.
-                (Method::Get, "/api/config") => {
-                    let cfg = { shared.read().unwrap().config.clone() };
-                    ok_json(serde_json::to_value(cfg).unwrap_or_else(|_| json!({})))
-                }
-                _ => bad(404, "not found"),
+                _ => empty_404(),
             };
 
             let _ = req.respond(resp);
