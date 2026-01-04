@@ -28,21 +28,15 @@ fn write_u64(path: &str, val: u64) -> io::Result<()> {
     write_str(path, &val.to_string())
 }
 
-/// OUT init from full_rgb.sh: hwen=1, brightness=max_brightness (if present).
+/// OUT init: only ensure HW enable (hwen=1) if present.
+///
+/// NOTE: We intentionally do **not** touch brightness here anymore.
+/// On some systems/services the brightness node may be managed elsewhere, and
+/// writing it during early boot can lead to inconsistent behavior.
 fn ensure_external_init() {
     let hwen = p("hwen");
     if Path::new(&hwen).exists() {
         let _ = write_u64(&hwen, 1);
-    }
-
-    let br = p("brightness");
-    let maxbr = p("max_brightness");
-    if Path::new(&br).exists() && Path::new(&maxbr).exists() {
-        if let Some(s) = read_str(&maxbr) {
-            if let Ok(n) = s.trim().parse::<u64>() {
-                let _ = write_u64(&br, n);
-            }
-        }
     }
 }
 
