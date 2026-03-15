@@ -7,6 +7,7 @@ use crate::sysfs;
 pub struct ChargeProbe {
     online_paths: Vec<PathBuf>,
     battery_status_path: Option<PathBuf>,
+    battery_capacity_path: Option<PathBuf>,
 }
 
 impl ChargeProbe {
@@ -14,6 +15,7 @@ impl ChargeProbe {
         let base = Path::new("/sys/class/power_supply");
         let mut online_paths = Vec::new();
         let mut battery_status_path = None;
+        let mut battery_capacity_path = None;
 
         let entries = std::fs::read_dir(base).ok()?;
         for e in entries.flatten() {
@@ -26,10 +28,14 @@ impl ChargeProbe {
             let ty_s = std::fs::read_to_string(&ty).unwrap_or_default().trim().to_string();
             let online = p.join("online");
             let status = p.join("status");
+            let capacity = p.join("capacity");
 
             if ty_s.eq_ignore_ascii_case("Battery") {
                 if status.exists() && battery_status_path.is_none() {
                     battery_status_path = Some(status);
+                }
+                if capacity.exists() && battery_capacity_path.is_none() {
+                    battery_capacity_path = Some(capacity);
                 }
                 continue;
             }
@@ -39,10 +45,10 @@ impl ChargeProbe {
             }
         }
 
-        if online_paths.is_empty() && battery_status_path.is_none() {
+        if online_paths.is_empty() && battery_status_path.is_none() && battery_capacity_path.is_none() {
             None
         } else {
-            Some(Self { online_paths, battery_status_path })
+            Some(Self { online_paths, battery_status_path, battery_capacity_path })
         }
     }
 
@@ -61,5 +67,11 @@ impl ChargeProbe {
             }
         }
         false
+    }
+
+    pub fn battery_percent(&self) -> Option<u8> {
+        let p = self.battery_capacity_path.as_ref()?;
+        let v = sysfs::read_u64(p)?;
+        Some(v.min(100) as u8)
     }
 }

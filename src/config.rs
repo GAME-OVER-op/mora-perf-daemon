@@ -52,15 +52,16 @@ pub const CPU7_FREQS: &[u64] = &[
     2880000, 2937600, 2995200, 3052800, 3110400, 3187200, 3244800, 3302400,
 ];
 pub const GPU_FREQS: &[u64] = &[
-    231000000, 310000000, 366000000, 422000000, 500000000, 578000000, 629000000,
-    680000000, 720000000, 770000000, 834000000, 903000000, 916000000,
+    120000000, 180000000, 231000000, 310000000, 366000000, 422000000, 500000000, 578000000, 629000000,
+    680000000, 720000000, 770000000, 834000000, 903000000, 916800000,
 ];
 
 // Loops / timings
 pub const ENFORCE_ACTIVE: u64 = 6;
 pub const ENFORCE_IDLE: u64 = 18;
-pub const CHG_CHECK_EVERY: u64 = 2;
-pub const GAME_CHECK_EVERY: u64 = 2;
+// Reduce wakeups/`cmd` calls to keep CPU usage low.
+// Charging probe interval is adaptive (see main.rs), so there's no single constant here.
+pub const GAME_CHECK_EVERY: u64 = 8;
 
 // Suspicious background proc scan
 pub const BG_CPU_THRESHOLD_PCT: u8 = 15;

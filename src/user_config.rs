@@ -10,6 +10,11 @@ use std::{
 
 pub const CONFIG_PATH: &str = "/data/adb/modules/mora_perf_deamon/config/config.json";
 
+pub const GAMES_PATH: &str = "/data/adb/modules/mora_perf_deamon/config/games.json";
+
+
+fn default_true() -> bool { true }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserConfig {
     /// Static API token used by local clients (Android app) to access /api/* endpoints.
@@ -18,6 +23,20 @@ pub struct UserConfig {
     /// If this field is missing or empty, the daemon will generate one and persist it.
     #[serde(default)]
     pub api_token: String,
+
+    /// Allow the daemon to post Android notifications via `cmd notification post`.
+    /// If false, the daemon will not post any daemon notifications.
+    #[serde(default = "default_true")]
+    pub daemon_notifications: bool,
+
+    /// Whether Mora should actively control the phone cooler.
+    /// If false, fan commands are not sent and the fan is forced to level 0 once.
+    #[serde(default = "default_true")]
+    pub use_phone_cooler: bool,
+
+    /// Smart battery saver: disables CPU cores based on battery %, but never during charging or in games.
+    #[serde(default)]
+    pub battery_saver: BatterySaverConfig,
 
     #[serde(default)]
     pub charging: ChargingConfig,
@@ -33,6 +52,9 @@ impl Default for UserConfig {
     fn default() -> Self {
         Self {
             api_token: String::new(),
+            daemon_notifications: true,
+            use_phone_cooler: true,
+            battery_saver: BatterySaverConfig::default(),
             charging: ChargingConfig::default(),
             notifications: NotificationsConfig::default(),
             fan_led: FanLedDefaults::default(),
@@ -142,6 +164,25 @@ fn normalize_fan_mode(m: FanLedMode) -> FanLedMode {
         FanLedMode::Off | FanLedMode::Flow | FanLedMode::Breath | FanLedMode::Blink | FanLedMode::Static => m,
     }
 }
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BatterySaverConfig {
+    /// Enable/disable smart battery saver.
+    /// Default: false (feature opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Default for BatterySaverConfig {
+    fn default() -> Self {
+        Self { enabled: false, extra: BTreeMap::new() }
+    }
+}
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NotificationsConfig {

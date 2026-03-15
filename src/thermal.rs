@@ -44,6 +44,10 @@ pub fn read_soc_temp_mc(cpu_avg: Option<i32>, gpu_avg: Option<i32>) -> Option<i3
     }
 }
 
+pub fn read_control_temp_mc(batt_mc: Option<i32>, cpu_avg: Option<i32>, gpu_avg: Option<i32>) -> Option<i32> {
+    batt_mc.or_else(|| read_soc_temp_mc(cpu_avg, gpu_avg))
+}
+
 pub fn describe_paths() -> (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
     (build_paths(CPU_ZONE_IDS), build_paths(GPU_ZONE_IDS), battery_path())
 }

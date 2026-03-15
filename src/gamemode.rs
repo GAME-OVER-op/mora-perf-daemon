@@ -1,31 +1,22 @@
-
-use std::{collections::HashSet, process::Command};
-
-const GAME_LIST_STR: &str = include_str!("data/gamelist.txt");
-
-pub fn load_game_list() -> HashSet<String> {
-    GAME_LIST_STR
-        .split(|c| c == '|' || c == '\n' || c == '\r' || c == ' ' || c == '\t')
-        .filter_map(|s| {
-            let t = s.trim();
-            if t.is_empty() { None } else { Some(t.to_string()) }
-        })
-        .collect()
-}
+use std::process::Command;
 
 fn sh_out(cmd: &str) -> Option<String> {
     let out = Command::new("/system/bin/sh")
         .args(["-c", cmd])
         .output()
         .ok()?;
-    if !out.status.success() { return None; }
+    if !out.status.success() {
+        return None;
+    }
     String::from_utf8(out.stdout).ok()
 }
 
 fn sanitize_pkg(s: &str) -> String {
     let s = s.trim();
-    s.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'))
-        .to_string()
+    s.trim_matches(|c: char| {
+        !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    })
+    .to_string()
 }
 
 fn parse_pkg_from_line(line: &str) -> Option<String> {
@@ -42,7 +33,10 @@ fn parse_pkg_from_line(line: &str) -> Option<String> {
 
     if let Some(pos) = line.find("com.") {
         let sub = &line[pos..];
-        let end = sub.find('/').or_else(|| sub.find(' ')).unwrap_or(sub.len());
+        let end = sub
+            .find('/')
+            .or_else(|| sub.find(' '))
+            .unwrap_or(sub.len());
         return Some(sanitize_pkg(&sub[..end]));
     }
 

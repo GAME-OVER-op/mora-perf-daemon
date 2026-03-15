@@ -1,10 +1,10 @@
 use crate::{
     config_watch,
+    games::{GameEntry, SplitChargeConfig, TriggersConfig},
+    games_watch,
     mem::read_vmrss_kb,
     state::SharedState,
-    user_config::{
-        FanLedSetting, NotificationsConfig, ProfileConfig, ProfileType, UserConfig,
-    },
+    user_config::{FanLedSetting, NotificationsConfig, ProfileConfig, ProfileType, UserConfig},
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -357,8 +357,37 @@ fn build_state_json(shared: &Arc<RwLock<SharedState>>) -> Value {
             "enabled": s.info.charging_enabled,
             "effective": s.info.charging_effective
         },
+        "battery": {
+            "percent": s.info.battery_percent,
+            "saver": {
+                "enabled": s.config.battery_saver.enabled,
+                "active": s.info.battery_saver_active,
+                "override": s.info.battery_saver_override,
+                "disabled_cores": s.info.battery_saver_disabled_cores.clone(),
+                "reapply_in_sec": s.info.battery_saver_reapply_in_sec
+            },
+            "screen_off_saver": {
+                "after_minutes": 30,
+                "active": s.info.screen_off_core_saver_active,
+                "disabled_cores": s.info.screen_off_core_saver_disabled_cores.clone()
+            },
+            "split_charge": {
+                "active": s.info.split_charge_active,
+                "package": s.info.split_charge_package.clone(),
+                "node": s.info.split_charge_node.clone(),
+                "stop_battery_percent": s.info.split_charge_stop_battery_percent,
+                "last_error": s.info.split_charge_last_error.clone()
+            }
+        },
         "game_mode": s.info.game_mode,
+        "triggers": {
+            "active": s.info.triggers_active,
+            "package": s.info.triggers_pkg.clone(),
+            "left": s.info.triggers_left,
+            "right": s.info.triggers_right
+        },
         "idle_mode": s.info.idle_mode,
+        "daemon_notifications": s.config.daemon_notifications,
         "active_profile": s.info.active_profile.clone(),
         "led_profile": s.info.led_profile.clone(),
         "leds": {
@@ -377,7 +406,13 @@ fn build_state_json(shared: &Arc<RwLock<SharedState>>) -> Value {
             "VmRSS_kb": read_vmrss_kb()
         },
         "config_rev": s.config_rev,
-        "last_config_error": s.last_config_error.clone()
+        "last_config_error": s.last_config_error.clone(),
+        "games": {
+            "count": s.games.file.games.len(),
+            "driver_count": s.games.driver_pkgs.len(),
+            "rev": s.games_rev,
+            "last_error": s.last_games_error.clone()
+        }
     })
 }
 
@@ -1083,6 +1118,403 @@ fn upsert_named_profile(
     cfg.profiles.push(p);
 }
 
+
+#[derive(Deserialize)]
+struct DaemonNotificationsPayload {
+    enabled: bool,
+}
+
+fn build_daemon_notifications_json(shared: &Arc<RwLock<SharedState>>) -> Value {
+    let enabled = { shared.read().unwrap().config.daemon_notifications };
+    json!({ "enabled": enabled })
+}
+
+fn handle_api_daemon_notifications_set(
+    shared: &Arc<RwLock<SharedState>>,
+    cfg_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: DaemonNotificationsPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    let mut cfg = { shared.read().unwrap().config.clone() };
+    cfg.daemon_notifications = payload.enabled;
+
+    config_watch::apply_and_persist(shared, cfg_path, cfg)
+}
+
+#[derive(Deserialize)]
+struct UsePhoneCoolerPayload {
+    enabled: bool,
+}
+
+fn build_use_phone_cooler_json(shared: &Arc<RwLock<SharedState>>) -> Value {
+    let enabled = { shared.read().unwrap().config.use_phone_cooler };
+    json!({ "enabled": enabled })
+}
+
+fn handle_api_use_phone_cooler_set(
+    shared: &Arc<RwLock<SharedState>>,
+    cfg_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: UsePhoneCoolerPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    let mut cfg = { shared.read().unwrap().config.clone() };
+    cfg.use_phone_cooler = payload.enabled;
+
+    config_watch::apply_and_persist(shared, cfg_path, cfg)
+}
+
+#[derive(Deserialize)]
+struct BatterySaverPayload {
+    enabled: bool,
+}
+
+fn build_battery_saver_json(shared: &Arc<RwLock<SharedState>>) -> Value {
+    let enabled = { shared.read().unwrap().config.battery_saver.enabled };
+    json!({ "enabled": enabled })
+}
+
+fn handle_api_battery_saver_set(
+    shared: &Arc<RwLock<SharedState>>,
+    cfg_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: BatterySaverPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    let mut cfg = { shared.read().unwrap().config.clone() };
+    cfg.battery_saver.enabled = payload.enabled;
+
+    config_watch::apply_and_persist(shared, cfg_path, cfg)
+}
+
+#[derive(Deserialize)]
+struct GameAddPayload {
+    package: String,
+
+    #[serde(default)]
+    game_driver: bool,
+
+    #[serde(default)]
+    fan_min_level: Option<u8>,
+
+    #[serde(default)]
+    gpu_turbo: bool,
+
+    #[serde(default)]
+    triggers: Option<TriggersConfig>,
+
+    #[serde(default)]
+    split_charge: SplitChargeConfig,
+
+    #[serde(default)]
+    disable_thermal_limit: bool,
+}
+
+#[derive(Deserialize)]
+struct GameRemovePayload {
+    package: String,
+}
+
+#[derive(Deserialize)]
+struct GameSetDriverPayload {
+    package: String,
+    game_driver: bool,
+}
+
+
+#[derive(Deserialize)]
+struct GameSetGpuTurboPayload {
+    package: String,
+    gpu_turbo: bool,
+}
+
+#[derive(Deserialize)]
+struct GameSetFanMinPayload {
+    package: String,
+    fan_min_level: u8,
+}
+
+#[derive(Deserialize)]
+struct GameSetTriggersPayload {
+    package: String,
+    triggers: TriggersConfig,
+}
+
+#[derive(Deserialize)]
+struct GameSetSplitChargePayload {
+    package: String,
+    split_charge: SplitChargeConfig,
+}
+
+#[derive(Deserialize)]
+struct GameSetDisableThermalLimitPayload {
+    package: String,
+    disable_thermal_limit: bool,
+}
+
+fn build_games_json(shared: &Arc<RwLock<SharedState>>) -> Value {
+    let file = { shared.read().unwrap().games.file.clone() };
+    serde_json::to_value(file).unwrap_or_else(|_| json!({"games": []}))
+}
+
+fn handle_api_games_add(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameAddPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+
+    if let Some(lvl) = payload.fan_min_level {
+        if !(2..=5).contains(&lvl) {
+            return Err("fan_min_level must be in range 2..=5".to_string());
+        }
+    }
+
+    if let Some(t) = &payload.triggers {
+        if t.enabled {
+            if t.left.enabled {
+                if t.left.x < 0 || t.left.y < 0 {
+                    return Err("left trigger coordinates must be non-negative".to_string());
+                }
+            }
+            if t.right.enabled {
+                if t.right.x < 0 || t.right.y < 0 {
+                    return Err("right trigger coordinates must be non-negative".to_string());
+                }
+            }
+        }
+    }
+    if payload.split_charge.stop_battery_percent > 100 {
+        return Err("split_charge.stop_battery_percent must be in range 0..=100".to_string());
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    file.games.retain(|g| g.package != payload.package);
+    file.games.push(GameEntry {
+        package: payload.package,
+        game_driver: payload.game_driver,
+        fan_min_level: payload.fan_min_level,
+        gpu_turbo: payload.gpu_turbo,
+        triggers: payload.triggers,
+        split_charge: payload.split_charge,
+        disable_thermal_limit: payload.disable_thermal_limit,
+        extra: Default::default(),
+    });
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
+fn handle_api_games_set_fan_min(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameSetFanMinPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+    if !(2..=5).contains(&payload.fan_min_level) {
+        return Err("fan_min_level must be in range 2..=5".to_string());
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    let mut found = false;
+    for g in &mut file.games {
+        if g.package == payload.package {
+            g.fan_min_level = Some(payload.fan_min_level);
+            found = true;
+        }
+    }
+    if !found {
+        return Err("game not found".to_string());
+    }
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
+fn handle_api_games_remove(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameRemovePayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    file.games.retain(|g| g.package != payload.package);
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
+fn handle_api_games_set_driver(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameSetDriverPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    let mut found = false;
+    for g in &mut file.games {
+        if g.package == payload.package {
+            g.game_driver = payload.game_driver;
+            found = true;
+        }
+    }
+
+    if !found {
+        return Err("game not found".to_string());
+    }
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
+fn handle_api_games_set_gpu_turbo(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameSetGpuTurboPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    let mut found = false;
+    for g in &mut file.games {
+        if g.package == payload.package {
+            g.gpu_turbo = payload.gpu_turbo;
+            found = true;
+        }
+    }
+
+    if !found {
+        return Err("game not found".to_string());
+    }
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
+
+fn handle_api_games_set_triggers(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameSetTriggersPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+
+    if payload.triggers.enabled {
+        if payload.triggers.left.enabled {
+            if payload.triggers.left.x < 0 || payload.triggers.left.y < 0 {
+                return Err("left trigger coordinates must be non-negative".to_string());
+            }
+        }
+        if payload.triggers.right.enabled {
+            if payload.triggers.right.x < 0 || payload.triggers.right.y < 0 {
+                return Err("right trigger coordinates must be non-negative".to_string());
+            }
+        }
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    let mut found = false;
+    for g in &mut file.games {
+        if g.package == payload.package {
+            g.triggers = Some(payload.triggers.clone());
+            found = true;
+        }
+    }
+    if !found {
+        return Err("game not found".to_string());
+    }
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
+fn handle_api_games_set_split_charge(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameSetSplitChargePayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+    if payload.split_charge.stop_battery_percent > 100 {
+        return Err("split_charge.stop_battery_percent must be in range 0..=100".to_string());
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    let mut found = false;
+    for g in &mut file.games {
+        if g.package == payload.package {
+            g.split_charge = payload.split_charge.clone();
+            found = true;
+        }
+    }
+    if !found {
+        return Err("game not found".to_string());
+    }
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
+fn handle_api_games_set_disable_thermal_limit(
+    shared: &Arc<RwLock<SharedState>>,
+    games_path: &Path,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: GameSetDisableThermalLimitPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.package.trim().is_empty() {
+        return Err("package is empty".to_string());
+    }
+
+    let mut file = { shared.read().unwrap().games.file.clone() };
+    let mut found = false;
+    for g in &mut file.games {
+        if g.package == payload.package {
+            g.disable_thermal_limit = payload.disable_thermal_limit;
+            found = true;
+        }
+    }
+    if !found {
+        return Err("game not found".to_string());
+    }
+
+    games_watch::apply_and_persist(shared, games_path, file)
+}
+
 fn handle_api_save(shared: &Arc<RwLock<SharedState>>, cfg_path: &Path, body: &[u8]) -> Result<(), String> {
     let payload: UiSavePayload = serde_json::from_slice(body).map_err(|e| e.to_string())?;
     let mut cfg = { shared.read().unwrap().config.clone() };
@@ -1115,7 +1547,7 @@ fn handle_api_save(shared: &Arc<RwLock<SharedState>>, cfg_path: &Path, body: &[u
     config_watch::apply_and_persist(shared, cfg_path, cfg)
 }
 
-pub fn spawn(shared: Arc<RwLock<SharedState>>, _leds: Arc<crate::leds::Leds>, cfg_path: PathBuf) {
+pub fn spawn(shared: Arc<RwLock<SharedState>>, _leds: Arc<crate::leds::Leds>, cfg_path: PathBuf, games_path: PathBuf) {
     thread::spawn(move || {
         let server = match Server::http(BIND_ADDR) {
             Ok(s) => s,
@@ -1155,14 +1587,85 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, _leds: Arc<crate::leds::Leds>, cf
                 (Method::Get, "/api/config") => {
                     let cfg = { shared.read().unwrap().config.clone() };
                     ok_json(serde_json::to_value(cfg).unwrap_or_else(|_| json!({})))
-                }
+                },
+
+                // Get daemon notification switch.
+                (Method::Get, "/api/daemon_notifications") => {
+                    ok_json(build_daemon_notifications_json(&shared))
+                },
+
+                // Set daemon notification switch.
+                (Method::Post, "/api/daemon_notifications") => match handle_api_daemon_notifications_set(&shared, &cfg_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+
+                // Get battery saver switch.
+                (Method::Get, "/api/battery_saver") => {
+                    ok_json(build_battery_saver_json(&shared))
+                },
+
+                // Set battery saver switch.
+                (Method::Post, "/api/battery_saver") => match handle_api_battery_saver_set(&shared, &cfg_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+
+                // Get phone cooler usage switch.
+                (Method::Get, "/api/use_phone_cooler") => {
+                    ok_json(build_use_phone_cooler_json(&shared))
+                },
+
+                // Set phone cooler usage switch.
+                (Method::Post, "/api/use_phone_cooler") => match handle_api_use_phone_cooler_set(&shared, &cfg_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+
+                // Games list (games.json)
+                (Method::Get, "/api/games") => ok_json(build_games_json(&shared)),
+
+                (Method::Post, "/api/games/add") => match handle_api_games_add(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+                (Method::Post, "/api/games/remove") => match handle_api_games_remove(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+                (Method::Post, "/api/games/set_driver") => match handle_api_games_set_driver(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+
+                (Method::Post, "/api/games/set_gpu_turbo") => match handle_api_games_set_gpu_turbo(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+
+                (Method::Post, "/api/games/set_fan_min") => match handle_api_games_set_fan_min(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+
+                (Method::Post, "/api/games/set_triggers") => match handle_api_games_set_triggers(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+                (Method::Post, "/api/games/set_split_charge") => match handle_api_games_set_split_charge(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+                (Method::Post, "/api/games/set_disable_thermal_limit") => match handle_api_games_set_disable_thermal_limit(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
 
                 // Save (UI/app) config changes.
                 (Method::Post, "/api/save") => match handle_api_save(&shared, &cfg_path, &body) {
                     Ok(_) => Response::from_string("ok"),
                     Err(e) => bad(400, &e),
                 },
-
                 _ => empty_404(),
             };
 

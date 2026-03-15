@@ -150,14 +150,14 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
 
                 // Keep snapshot in sync to avoid immediate retrigger when re-enabled,
                 // but do it rarely to save power.
-                if last_disabled_sync.elapsed() > Duration::from_secs(10) {
+                if last_disabled_sync.elapsed() > Duration::from_secs(30) {
                     if let Ok(snap) = snapshot(&cmd, &su) {
                         prev = snap;
                     }
                     last_disabled_sync = Instant::now();
                 }
 
-                thread::sleep(Duration::from_millis(5000));
+                thread::sleep(Duration::from_millis(10000));
                 continue;
             }
 
@@ -236,9 +236,10 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
                 }
             }
 
-            // Poll interval (save power when screen is ON).
-            let ms = if screen_on { 3500 } else { 1000 };
-            thread::sleep(Duration::from_millis(ms));
+            // Poll interval: `cmd notification list` is expensive; poll slowly.
+            // Note: `poll()` will still wake immediately on trigger events; this only affects
+            // notification LED reaction time.
+            thread::sleep(Duration::from_millis(10000));
         }
     });
 }

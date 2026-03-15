@@ -6,6 +6,8 @@ mod domain;
 mod fan;
 mod fmt;
 mod gamemode;
+mod games;
+mod games_watch;
 mod gpu;
 mod leds;
 mod mem;
@@ -16,10 +18,12 @@ mod procwatch;
 mod profiles;
 mod screen;
 mod services;
+mod split_charge;
 mod state;
 mod sysfs;
 mod tempzone;
 mod thermal;
+mod triggers;
 mod user_config;
 mod web;
 
@@ -36,7 +40,8 @@ use crate::{
     domain::{base_index_from_ratio, mid_freq, Domain},
     fan::Fan,
     fmt::{fmt_c, fmt_hz, fmt_khz},
-    gamemode::{get_foreground_package, load_game_list},
+    gamemode::get_foreground_package,
+    games::{apply_updatable_driver_apps, load_or_init as load_games_or_init},
     gpu::read_gpu_util_any,
     leds::Leds,
     notify::{ensure_icon_on_disk, post_notification},
@@ -46,11 +51,59 @@ use crate::{
     screen::{detect_screen_probe, raw_screen_on},
     state::SharedState,
     services::disable_thermal_services,
-    sysfs::write_str_if_needed,
+    split_charge::{DesiredSplitCharge, SplitChargeController},
+    sysfs::{write_str_if_needed, write_u64_if_needed},
     tempzone::{zone_with_hysteresis, TempZone},
-    thermal::{describe_paths, read_avg_temp_mc, read_soc_temp_mc},
-    user_config::{load_or_init, CONFIG_PATH},
+    thermal::{describe_paths, read_avg_temp_mc, read_control_temp_mc, read_soc_temp_mc},
+    triggers::TriggerManager,
+    user_config::{load_or_init as load_config_or_init, CONFIG_PATH, GAMES_PATH},
 };
+
+
+fn maybe_post_notification(shared: &Arc<RwLock<SharedState>>, message: &str) {
+    // Read live config so toggling daemon_notifications takes effect immediately.
+    let enabled = { shared.read().unwrap().config.daemon_notifications };
+    if enabled {
+        post_notification(message);
+    }
+}
+
+fn cpu_online_path(cpu: usize) -> PathBuf {
+    PathBuf::from(format!("/sys/devices/system/cpu/cpu{}/online", cpu))
+}
+
+fn is_cpu_online(cpu: usize) -> bool {
+    if cpu == 0 {
+        return true;
+    }
+    let p = cpu_online_path(cpu);
+    // Many kernels omit `online` for permanently-online cores; treat missing as online.
+    if !p.exists() {
+        return true;
+    }
+    sysfs::read_u64(&p).unwrap_or(1) == 1
+}
+
+fn set_cpu_online(cpu: usize, online: bool, cache_u64: &mut HashMap<PathBuf, u64>) {
+    let p = cpu_online_path(cpu);
+    let target = if online { 1u64 } else { 0u64 };
+    let _ = write_u64_if_needed(&p, target, cache_u64, true);
+}
+
+fn battery_saver_disable_delay(override_dur: Duration) -> Duration {
+    let s = override_dur.as_secs_f64();
+    if s <= 10.0 {
+        Duration::from_secs(5)
+    } else if s >= 20.0 {
+        Duration::from_secs(30)
+    } else {
+        let t = (s - 10.0) / 10.0;
+        let ms = 5000.0 + t * 25000.0;
+        Duration::from_millis(ms.round() as u64)
+    }
+}
+
+const SCREEN_OFF_CORE_SAVER_SECS: u64 = 30 * 60;
 
 fn main() {
     println!("mora_perf_daemon starting");
@@ -66,8 +119,15 @@ fn main() {
         if bat_path.is_some() { "ok" } else { "missing" }
     );
 
-    let game_list = load_game_list();
-    println!("GAME: list {} pkgs", game_list.len());
+    let games_path = PathBuf::from(GAMES_PATH);
+    let (games_rt, games_err) = load_games_or_init(games_path.as_path());
+    println!(
+        "GAMES: list {} pkgs (driver {})",
+        games_rt.file.games.len(),
+        games_rt.driver_pkgs.len()
+    );
+    // Sync Android updatable game driver list once at startup.
+    apply_updatable_driver_apps(&games_rt.driver_string);
 
     let screen_probe = detect_screen_probe();
     if let Some(p) = &screen_probe {
@@ -87,14 +147,22 @@ fn main() {
     // Extended functionality: config/profiles/notifications/web UI
     // ============================================================
     let cfg_path = PathBuf::from(CONFIG_PATH);
-    let cfg = load_or_init(cfg_path.as_path());
-    let shared = Arc::new(RwLock::new(SharedState::new(cfg)));
+    let cfg = load_config_or_init(cfg_path.as_path());
+    let shared = Arc::new(RwLock::new(SharedState::new(cfg, games_rt)));
     let leds = Arc::new(Leds::new());
+
+    // Record initial games load status.
+    {
+        let mut s = shared.write().unwrap();
+        s.games_rev = s.games_rev.wrapping_add(1);
+        s.last_games_error = games_err;
+    }
 
     // Start background workers.
     config_watch::spawn(shared.clone(), cfg_path.clone());
+    games_watch::spawn(shared.clone(), games_path.clone());
     notifications::spawn(shared.clone(), leds.clone());
-    web::spawn(shared.clone(), leds.clone(), cfg_path.clone());
+    web::spawn(shared.clone(), leds.clone(), cfg_path.clone(), games_path.clone());
 
     // Apply initial LED state (Normal profile, screen assumed ON).
     {
@@ -124,6 +192,18 @@ let mut s = shared.write().unwrap();
     } else {
         println!("FAN: sysfs not found (skip)");
     }
+
+    // Triggers (shoulder buttons -> virtual touch). Optional.
+    let triggers = match TriggerManager::init() {
+        Ok(t) => {
+            println!("TRIG: ready");
+            Some(t)
+        }
+        Err(e) => {
+            println!("TRIG: unavailable ({})", e);
+            None
+        }
+    };
 
     let gpu_busy_percent_path = {
         let p = PathBuf::from(GPU_BUSY_PERCENT);
@@ -216,20 +296,49 @@ let mut s = shared.write().unwrap();
 
     let mut charging = false;
     let mut last_chg_check = Instant::now();
-    let chg_check_every = Duration::from_secs(CHG_CHECK_EVERY);
+
+    // Adaptive charging probe interval based on battery percent.
+    // - > 80%  -> 15s
+    // - > 50%  -> 10s
+    // - <= 50% -> 5s
+    // If battery percent is unknown, use 10s.
+    let chg_check_every = |pct: Option<u8>| -> Duration {
+        match pct {
+            Some(p) if p > 80 => Duration::from_secs(15),
+            Some(p) if p > 50 => Duration::from_secs(10),
+            Some(_) => Duration::from_secs(5),
+            None => Duration::from_secs(10),
+        }
+    };
+
+    let mut battery_percent: Option<u8> = None;
+    let mut last_batt_check = Instant::now();
+    // Battery percent is slow-changing; poll rarely to reduce wakeups.
+    let batt_check_every = Duration::from_secs(60);
 
     let mut game_mode = false;
+    // Minimum fan level while current foreground game is active (2..=5). Default matches config::GAME_FAN_BASE.
+    let mut game_fan_min_level: u8 = GAME_FAN_BASE;
+    // Per-game GPU turbo flag for current foreground game.
+    let mut game_gpu_turbo: bool = false;
+    // Per-game thermal limit bypass flag.
+    let mut game_disable_thermal_limit: bool = false;
+    let mut last_triggers_cfg: Option<crate::triggers::ActiveConfig> = None;
     let mut last_game_check = Instant::now();
     let game_check_every = Duration::from_secs(GAME_CHECK_EVERY);
     let mut last_game_pkg: Option<String> = None;
+    let mut game_split_charge_cfg = crate::games::SplitChargeConfig::default();
+    let mut split_charge = SplitChargeController::new();
+    let mut fan_disabled_by_config = false;
 
     let mut idle_mode = false;
     let mut idle_accum = Duration::ZERO;
 
     let mut proc_watch = ProcWatch::new();
     let mut last_proc_check = Instant::now();
-    let proc_check_active = Duration::from_secs(3);
-    let proc_check_idle = Duration::from_secs(6);
+    // Background proc scan is expensive; do it rarely.
+    let proc_check_active = Duration::from_secs(10);
+    let proc_check_idle = Duration::from_secs(10);
 
     let mut suspicious: HashMap<String, u8> = HashMap::new();
     let long_off_threshold = Duration::from_secs(LONG_OFF_NOTIFY_SECS);
@@ -241,25 +350,38 @@ let mut s = shared.write().unwrap();
     let mut cfg_cache = { shared.read().unwrap().config.clone() };
     let mut cfg_rev_cache = { shared.read().unwrap().config_rev };
 
+    // Smart battery saver runtime state.
+    let mut bs_high_streak: Duration = Duration::ZERO;
+    let mut bs_override = false;
+    let mut bs_override_since: Option<Instant> = None;
+    let mut bs_reapply_at: Option<Instant> = None;
+    let mut bs_disabled_cores: Vec<usize> = Vec::new();
+
     loop {
         let now = Instant::now();
         let dt = now.duration_since(last_loop);
         last_loop = now;
 
-        // charging
-        if now.duration_since(last_chg_check) >= chg_check_every {
+        // charging (adaptive interval based on battery percent)
+        if now.duration_since(last_chg_check) >= chg_check_every(battery_percent) {
             let new_chg = charge_probe.as_ref().map(|p| p.is_charging()).unwrap_or(false);
             if new_chg != charging {
                 charging = new_chg;
                 println!("CHG: {}", if charging { "ON" } else { "OFF" });
 
                 if charging {
-                    post_notification("Charger connected: charging fan policy enabled");
+                    maybe_post_notification(&shared, "Charger connected: charging fan policy enabled");
                 } else {
-                    post_notification("Charger disconnected: normal fan policy enabled");
+                    maybe_post_notification(&shared, "Charger disconnected: normal fan policy enabled");
                 }
             }
             last_chg_check = now;
+        }
+
+        // battery percent
+        if now.duration_since(last_batt_check) >= batt_check_every {
+            battery_percent = charge_probe.as_ref().and_then(|p| p.battery_percent());
+            last_batt_check = now;
         }
 
         // screen
@@ -276,15 +398,110 @@ let mut s = shared.write().unwrap();
             true
         };
 
+        // Triggers must work only when screen is ON.
+        if !screen_on {
+            if let Some(mgr) = triggers.as_ref() {
+                if last_triggers_cfg.is_some() {
+                    mgr.disable();
+                    last_triggers_cfg = None;
+                    let mut s = shared.write().unwrap();
+                    s.info.triggers_active = false;
+                    s.info.triggers_left = false;
+                    s.info.triggers_right = false;
+                    s.info.triggers_pkg = None;
+                }
+            }
+        }
+
         // Game mode detect (only when screen ON)
         if screen_on && now.duration_since(last_game_check) >= game_check_every {
             last_game_check = now;
 
             let pkg = get_foreground_package();
-            let is_game = pkg.as_ref().map(|p| game_list.contains(p)).unwrap_or(false);
+            let (is_game, detected_fan_min, detected_gpu_turbo, detected_disable_thermal_limit, detected_split_charge_cfg) = pkg
+                .as_deref()
+                .map(|p| {
+                    let s = shared.read().unwrap();
+                    (
+                        s.games.is_game(p),
+                        s.games.game_fan_min_level(p),
+                        s.games.game_gpu_turbo(p),
+                        s.games.game_disable_thermal_limit(p),
+                        s.games.game_split_charge(p),
+                    )
+                })
+                .unwrap_or((false, GAME_FAN_BASE, false, false, crate::games::SplitChargeConfig::default()));
+
+            // Keep the latest per-game minimum fan level while in game mode.
+            if is_game {
+                game_fan_min_level = detected_fan_min;
+                game_gpu_turbo = detected_gpu_turbo;
+                game_disable_thermal_limit = detected_disable_thermal_limit;
+                game_split_charge_cfg = detected_split_charge_cfg;
+            } else {
+                game_fan_min_level = GAME_FAN_BASE;
+                game_gpu_turbo = false;
+                game_disable_thermal_limit = false;
+                game_split_charge_cfg = crate::games::SplitChargeConfig::default();
+            }
+
+            // Triggers config (per-game). Active only for foreground game and screen ON.
+            if let Some(mgr) = triggers.as_ref() {
+                let desired_trig: Option<crate::triggers::ActiveConfig> = pkg
+                    .as_deref()
+                    .and_then(|p| {
+                        let s = shared.read().unwrap();
+                        if s.games.is_game(p) {
+                            s.games.triggers_for(p)
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|t| crate::triggers::ActiveConfig {
+                        enabled: t.enabled,
+                        left: crate::triggers::SideConfig {
+                            enabled: t.left.enabled,
+                            x_px: t.left.x,
+                            y_px: t.left.y,
+                        },
+                        right: crate::triggers::SideConfig {
+                            enabled: t.right.enabled,
+                            x_px: t.right.x,
+                            y_px: t.right.y,
+                        },
+                    })
+                    .filter(|c| c.enabled && (c.left.enabled || c.right.enabled));
+
+                if desired_trig != last_triggers_cfg {
+                    match desired_trig {
+                        Some(cfg) => mgr.set_config(cfg),
+                        None => mgr.disable(),
+                    }
+                    last_triggers_cfg = desired_trig;
+                }
+
+                let (active, l, r) = match last_triggers_cfg {
+                    Some(c) => (true, c.left.enabled, c.right.enabled),
+                    None => (false, false, false),
+                };
+                let mut s = shared.write().unwrap();
+                s.info.triggers_active = active;
+                s.info.triggers_left = l;
+                s.info.triggers_right = r;
+                s.info.triggers_pkg = if active { pkg.clone() } else { None };
+            }
 
             if pkg != last_game_pkg {
                 last_game_pkg = pkg.clone();
+
+                // If we switched between games, immediately apply that game's minimum.
+                if is_game {
+                    if let Some(f) = fan.as_mut() {
+                        if f.level() < game_fan_min_level {
+                            f.force_level(&mut cache_u64, game_fan_min_level);
+                        }
+                    }
+                }
             }
 
             if is_game != game_mode {
@@ -293,10 +510,12 @@ let mut s = shared.write().unwrap();
                 if game_mode {
                     let name = pkg.clone().unwrap_or_else(|| "?".to_string());
                     println!("GAME: ON ({})", name);
-                    post_notification(&format!("Game mode ON: {}", name));
-                    // fan baseline now
+                    maybe_post_notification(&shared, &format!("Game mode ON: {}", name));
+                    // fan baseline now (per-game minimum)
                     if let Some(f) = fan.as_mut() {
-                        f.force_level(&mut cache_u64, GAME_FAN_BASE);
+                        if f.level() < game_fan_min_level {
+                            f.force_level(&mut cache_u64, game_fan_min_level);
+                        }
                     }
 
                     // mins to ~50%
@@ -310,7 +529,7 @@ let mut s = shared.write().unwrap();
                     let _ = write_str_if_needed(&policy7_gov_path, GOV_GAME, &mut cache_str, true);
                 } else {
                     println!("GAME: OFF");
-                    post_notification("Game mode OFF");
+                    maybe_post_notification(&shared, "Game mode OFF");
 
                     cpu0.min_freq = cpu0_min_normal;
                     cpu2.min_freq = cpu2_min_normal;
@@ -341,19 +560,18 @@ let mut s = shared.write().unwrap();
                         if i > 0 { msg.push_str(", "); }
                         msg.push_str(&format!("{} {}%", name, pct));
                     }
-                    post_notification(&msg);
+                    maybe_post_notification(&shared, &msg);
                 }
             }
         }
 
-        // temps (AVG) and choose higher for control
+        // temps (AVG) and battery temperature for thermal control
         let cpu_avg_mc = read_avg_temp_mc(&cpu_paths);
         let gpu_avg_mc = read_avg_temp_mc(&gpu_paths);
-        let soc_temp_mc = read_soc_temp_mc(cpu_avg_mc, gpu_avg_mc);
-
         let batt_temp_mc = bat_path.as_ref().and_then(|p| sysfs::read_i32(p));
+        let control_temp_mc = read_control_temp_mc(batt_temp_mc, cpu_avg_mc, gpu_avg_mc);
 
-        let zone = if let Some(t) = soc_temp_mc {
+        let zone = if let Some(t) = control_temp_mc {
             zone_with_hysteresis(t, last_zone)
         } else {
             last_zone
@@ -362,8 +580,9 @@ let mut s = shared.write().unwrap();
         if zone != last_zone {
             let c = cpu_avg_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
             let g = gpu_avg_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
-            let u = soc_temp_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
-            println!("TEMP: cpu {} | gpu {} | use {} -> {:?} (reduce {}%)", c, g, u, zone, zone.reduction_percent());
+            let b = batt_temp_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
+            let u = control_temp_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
+            println!("TEMP: batt {} | cpu {} | gpu {} | use {} -> {:?} (reduce {}%)", b, c, g, u, zone, zone.reduction_percent());
             last_zone = zone;
         }
 
@@ -407,6 +626,139 @@ let mut s = shared.write().unwrap();
         // charging config switch (defaults to ON)
         let charging_enabled = cfg.charging.enabled;
         let charging_effective = charging && charging_enabled;
+        // ------------------------------
+        // Smart battery saver (CPU core hotplug)
+        // ------------------------------
+        // Average utilization across the base 5 cores (cpu0..cpu4), counting only online CPUs.
+        let base_util: u8 = {
+            let mut sum: u32 = 0;
+            let mut n: u32 = 0;
+            for c in 0usize..=4usize {
+                if is_cpu_online(c) {
+                    if let Some(&u) = cpu_utils.get(c) {
+                        sum += u as u32;
+                        n += 1;
+                    }
+                }
+            }
+            if n == 0 { 0 } else { (sum / n) as u8 }
+        };
+
+        let bs_enabled = cfg.battery_saver.enabled;
+        let mut offline_by_battery: Vec<usize> = Vec::new();
+        let mut offline_by_screen_off: Vec<usize> = Vec::new();
+
+        // Battery thresholds:
+        //  - <50%  => disable cpu7
+        //  - <35%  => disable cpu5,cpu6,cpu7
+        // Overrides:
+        //  - charging OR game_mode => always enable all
+        //  - if base cores >=90% for 15s => enable all cores
+        if bs_enabled && !charging && !game_mode {
+            if let Some(pct) = battery_percent {
+                if pct < 35 {
+                    offline_by_battery.extend([5usize, 6, 7]);
+                } else if pct < 50 {
+                    offline_by_battery.push(7);
+                }
+            }
+        }
+
+        let battery_baseline_off = !offline_by_battery.is_empty();
+
+        if !bs_enabled || charging || game_mode || !battery_baseline_off {
+            // Feature disabled / not applicable => reset battery-saver state.
+            bs_high_streak = Duration::ZERO;
+            bs_override = false;
+            bs_override_since = None;
+            bs_reapply_at = None;
+            offline_by_battery.clear();
+        } else {
+            // Override state machine.
+            if bs_override {
+                if base_util >= 90 {
+                    // Still heavy -> cancel pending re-apply.
+                    bs_reapply_at = None;
+                } else {
+                    if bs_reapply_at.is_none() {
+                        let since = bs_override_since.unwrap_or(now);
+                        let delay = battery_saver_disable_delay(now.duration_since(since));
+                        bs_reapply_at = Some(now + delay);
+                    }
+                    if bs_reapply_at.map(|t| now >= t).unwrap_or(false) {
+                        bs_override = false;
+                        bs_override_since = None;
+                        bs_reapply_at = None;
+                        bs_high_streak = Duration::ZERO;
+                    }
+                }
+            }
+
+            if !bs_override {
+                if base_util >= 90 {
+                    bs_high_streak += dt;
+                    if bs_high_streak >= Duration::from_secs(15) {
+                        bs_override = true;
+                        bs_override_since = Some(now);
+                        bs_reapply_at = None;
+                        bs_high_streak = Duration::ZERO;
+                    }
+                } else {
+                    bs_high_streak = Duration::ZERO;
+                }
+            }
+
+            if bs_override {
+                offline_by_battery.clear();
+            }
+        }
+
+        // Additional saver: if the screen stays OFF for 30 minutes, temporarily park cpu5..cpu7.
+        // Battery-based saver remains the priority; when the screen turns back ON, only the
+        // extra screen-off restriction is removed and the battery policy keeps whatever cores
+        // should still stay offline for the current battery %.
+        if !charging && !game_mode {
+            if let Some(since) = screen_off_since {
+                if !screen_on_state && now.duration_since(since) >= Duration::from_secs(SCREEN_OFF_CORE_SAVER_SECS) {
+                    offline_by_screen_off.extend([5usize, 6, 7]);
+                }
+            }
+        }
+
+        let mut desired_offline: Vec<usize> = offline_by_battery.clone();
+        for c in offline_by_screen_off.iter().copied() {
+            if !desired_offline.contains(&c) {
+                desired_offline.push(c);
+            }
+        }
+        desired_offline.sort_unstable();
+
+        // Apply desired core states (manage cpu5..cpu7 only).
+        for &c in &[5usize, 6, 7] {
+            set_cpu_online(c, !desired_offline.contains(&c), &mut cache_u64);
+        }
+
+        bs_disabled_cores = offline_by_battery.clone();
+        let bs_active = bs_enabled && !charging && !game_mode && !bs_override && !bs_disabled_cores.is_empty();
+        let bs_reapply_in = bs_reapply_at.map(|t| if t > now { (t - now).as_secs() } else { 0 });
+        let screen_off_saver_active = !offline_by_screen_off.is_empty();
+
+        let split_charge_should_enable = if game_mode
+            && game_split_charge_cfg.enabled
+            && charging
+            && battery_percent.map(|p| p > game_split_charge_cfg.stop_battery_percent).unwrap_or(false)
+        {
+            true
+        } else {
+            false
+        };
+        let desired_split_charge = DesiredSplitCharge {
+            should_enable: split_charge_should_enable,
+            package: if split_charge_should_enable { last_game_pkg.clone() } else { None },
+            stop_battery_percent: game_split_charge_cfg.stop_battery_percent,
+        };
+        split_charge.sync(desired_split_charge, now);
+        let split_charge_status = split_charge.status();
 
         // ------------------------------
         // Profile/LED selection
@@ -420,8 +772,22 @@ let mut s = shared.write().unwrap();
         let (ext_des, ext_last) = leds.get_external_state();
 // fan
         if let Some(f) = fan.as_mut() {
-            let soc = soc_temp_mc.unwrap_or(-1);
-            f.apply(&mut cache_u64, soc, batt_temp_mc, screen_on, charging_effective, game_mode);
+            if cfg.use_phone_cooler {
+                fan_disabled_by_config = false;
+                let soc = read_soc_temp_mc(cpu_avg_mc, gpu_avg_mc).unwrap_or(-1);
+                f.apply(
+                    &mut cache_u64,
+                    soc,
+                    batt_temp_mc,
+                    screen_on,
+                    charging_effective,
+                    game_mode,
+                    game_fan_min_level,
+                );
+            } else if !fan_disabled_by_config || f.level() != 0 {
+                f.force_level(&mut cache_u64, 0);
+                fan_disabled_by_config = true;
+            }
         }
 
         // idle mode
@@ -452,27 +818,50 @@ let mut s = shared.write().unwrap();
         let force_check = now.duration_since(last_enforce) >= enforce_every;
         if force_check { last_enforce = now; }
 
-        // desired idx update
+        
+        // GPU turbo: pin min/max to maximum while foreground game requests it.
+        let gpu_turbo_active = game_mode && screen_on && game_gpu_turbo;
+        if game_mode {
+            if gpu_turbo_active {
+                gpu.min_freq = gpu.max_freq;
+            } else {
+                gpu.min_freq = gpu_min_game;
+            }
+        } else {
+            gpu.min_freq = gpu_min_normal;
+        }
+
+// desired idx update
         let mut any_step = false;
         any_step |= cpu0.desired_step_update(u0, now, dt);
         any_step |= cpu2.desired_step_update(u2, now, dt);
         any_step |= cpu5.desired_step_update(u5, now, dt);
         any_step |= cpu7.desired_step_update(u7, now, dt);
-        any_step |= gpu.desired_step_update(ug, now, dt);
+        if !gpu_turbo_active {
+            any_step |= gpu.desired_step_update(ug, now, dt);
+        } else {
+            // Force GPU domain to max immediately while turbo is active.
+            gpu.force_idx(gpu.freqs.len() - 1, now);
+        }
 
         // apply caps
+        let effective_zone = if game_mode && game_disable_thermal_limit {
+            TempZone::Cool
+        } else {
+            zone
+        };
         let mut any_write = false;
-        any_write |= cpu0.apply(zone, &mut cache_u64, force_check).unwrap_or(false);
-        any_write |= cpu2.apply(zone, &mut cache_u64, force_check).unwrap_or(false);
-        any_write |= cpu5.apply(zone, &mut cache_u64, force_check).unwrap_or(false);
-        any_write |= cpu7.apply(zone, &mut cache_u64, force_check).unwrap_or(false);
-        any_write |= gpu.apply(zone, &mut cache_u64, force_check).unwrap_or(false);
+        any_write |= cpu0.apply(effective_zone, &mut cache_u64, force_check).unwrap_or(false);
+        any_write |= cpu2.apply(effective_zone, &mut cache_u64, force_check).unwrap_or(false);
+        any_write |= cpu5.apply(effective_zone, &mut cache_u64, force_check).unwrap_or(false);
+        any_write |= cpu7.apply(effective_zone, &mut cache_u64, force_check).unwrap_or(false);
+        any_write |= gpu.apply(effective_zone, &mut cache_u64, force_check).unwrap_or(false);
 
         // STAT
         if force_check {
             let c = cpu_avg_mc.map(|v| v as f32 / 1000.0);
             let g = gpu_avg_mc.map(|v| v as f32 / 1000.0);
-            let u = soc_temp_mc.map(|v| v as f32 / 1000.0);
+            let u = control_temp_mc.map(|v| v as f32 / 1000.0);
             let b = batt_temp_mc.map(|v| v as f32 / 1000.0);
 
             let c = c.map(|x| format!("{:.1}C", x)).unwrap_or_else(|| "?".to_string());
@@ -495,7 +884,7 @@ let mut s = shared.write().unwrap();
                 let mut st = shared.write().unwrap();
                 st.info.cpu_avg_mc = cpu_avg_mc;
                 st.info.gpu_avg_mc = gpu_avg_mc;
-                st.info.soc_mc = soc_temp_mc;
+                st.info.soc_mc = control_temp_mc;
                 st.info.batt_mc = batt_temp_mc;
                 st.info.temp_zone = format!("{:?}", zone);
                 // mora's reduction percent is returned as u32, UI stores it as u8.
@@ -515,6 +904,20 @@ let mut s = shared.write().unwrap();
             st.info.game_mode = game_mode;
             st.info.idle_mode = idle_mode;
 
+            // Battery saver runtime (updated continuously)
+            st.info.battery_percent = battery_percent;
+            st.info.battery_saver_active = bs_active;
+            st.info.battery_saver_override = bs_override;
+            st.info.battery_saver_disabled_cores = bs_disabled_cores.iter().map(|&x| x as u8).collect();
+            st.info.battery_saver_reapply_in_sec = bs_reapply_in;
+            st.info.screen_off_core_saver_active = screen_off_saver_active;
+            st.info.screen_off_core_saver_disabled_cores = offline_by_screen_off.iter().map(|&x| x as u8).collect();
+            st.info.split_charge_active = split_charge_status.active;
+            st.info.split_charge_package = split_charge_status.package.clone();
+            st.info.split_charge_node = split_charge_status.node.clone();
+            st.info.split_charge_stop_battery_percent = split_charge_status.target_stop_battery_percent;
+            st.info.split_charge_last_error = split_charge_status.last_error.clone();
+
             // Profiles / LED state (updated continuously)
             st.info.active_profile = active_prof.name.clone();
             st.info.led_profile = led_sel.source.clone();
@@ -528,7 +931,7 @@ let mut s = shared.write().unwrap();
         if any_write || any_step { stable_for = Duration::ZERO; } else { stable_for += dt; }
 
         let sleep_ms = match zone {
-            TempZone::Z120 | TempZone::Z130 => 450,
+            TempZone::B56 | TempZone::B57 | TempZone::B58 => 450,
             _ => {
                 if idle_mode {
                     6500

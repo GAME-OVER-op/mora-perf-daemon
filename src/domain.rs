@@ -112,6 +112,19 @@ impl Domain {
         }
     }
 
+    /// Force domain index (used for turbo modes). Allows an immediate jump on next apply.
+    pub fn force_idx(&mut self, idx: usize, now: Instant) {
+        if self.freqs.is_empty() { return; }
+        let idx = idx.min(self.freqs.len() - 1);
+        self.idx = idx;
+        // allow immediate jump to requested index on next apply
+        self.max_step_up_next_apply = self.freqs.len();
+        self.hold_until = now + Duration::from_millis(800);
+        self.low_accum = Duration::ZERO;
+        // avoid stale downscale logic
+        self.last_util = 100;
+    }
+
     pub fn desired_step_update(&mut self, util: u8, now: Instant, dt: Duration) -> bool {
         let old_idx = self.idx;
 
@@ -166,8 +179,9 @@ impl Domain {
 
     fn max_step_down_for_zone(zone: TempZone) -> usize {
         match zone {
-            TempZone::Z130 => 3,
-            TempZone::Z120 => 2,
+            TempZone::B58 => 4,
+            TempZone::B57 => 3,
+            TempZone::B56 | TempZone::B55 => 2,
             _ => 1,
         }
     }

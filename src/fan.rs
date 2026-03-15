@@ -11,6 +11,10 @@ pub struct Fan {
 
 impl Fan {
 
+    pub fn level(&self) -> u8 {
+        self.level
+    }
+
 fn set_nubia_parts_fan_enable(enable: bool) {
     let val = if enable { "1" } else { "0" };
 
@@ -93,6 +97,7 @@ fn set_nubia_parts_fan_enable(enable: bool) {
         screen_on: bool,
         charging: bool,
         game_mode: bool,
+        game_fan_min_level: u8,
     ) {
         let prev = self.level;
         let soc_level = if soc_temp_mc >= 0 {
@@ -110,9 +115,16 @@ fn set_nubia_parts_fan_enable(enable: bool) {
             0
         };
 
-        // Game mode baseline fan=2, but allow higher from temps/charging
+        // Game mode baseline fan level (2..=5), but allow higher from temps/charging.
         if game_mode && (screen_on || charging) {
-            target = target.max(config::GAME_FAN_BASE);
+            let base = if game_fan_min_level < 2 {
+                2
+            } else if game_fan_min_level > 5 {
+                5
+            } else {
+                game_fan_min_level
+            };
+            target = target.max(base);
         }
 
         // smooth +/-1
