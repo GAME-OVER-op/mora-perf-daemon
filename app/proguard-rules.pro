@@ -1,4 +1,1 @@
-# Keep JS interface methods
--keepclassmembers class * {
-    @android.webkit.JavascriptInterface <methods>;
-}
+# stage 1 - no custom rules yet
