@@ -42,7 +42,7 @@ use crate::{
     fmt::{fmt_c, fmt_hz, fmt_khz},
     gamemode::get_foreground_package,
     games::{apply_updatable_driver_apps, load_or_init as load_games_or_init},
-    gpu::read_gpu_util_any,
+    gpu::{load_gpu_freqs_dynamic, read_gpu_util_any},
     leds::Leds,
     notify::{ensure_icon_on_disk, post_notification},
     profiles::{select_active_mode_profile, select_base_led},
@@ -221,7 +221,8 @@ let mut s = shared.write().unwrap();
     let base2 = base_index_from_ratio(CPU2_FREQS, 0.48);
     let base5 = base_index_from_ratio(CPU5_FREQS, 0.48);
     let base7 = base_index_from_ratio(CPU7_FREQS, 0.35);
-    let baseg = base_index_from_ratio(GPU_FREQS, 0.50);
+    let (gpu_freqs, gpu_freqs_source) = load_gpu_freqs_dynamic(GPU_FREQS);
+    let baseg = base_index_from_ratio(gpu_freqs, 0.50);
 
     let now = Instant::now();
 
@@ -246,9 +247,17 @@ let mut s = shared.write().unwrap();
         60, 50, Duration::from_secs(7), Duration::from_secs(4)
     );
     let mut gpu = Domain::new(
-        "GPU", GPU_FREQS, GPU_MIN, GPU_MAX, baseg, true, now,
+        "GPU", gpu_freqs, GPU_MIN, GPU_MAX, baseg, true, now,
         UP_UTIL, SPIKE_DELTA2, SPIKE_DELTA4, HIGH_JUMP2, HIGH_JUMP4,
         60, 50, Duration::from_secs(5), Duration::from_secs(3)
+    );
+
+    println!(
+        "GPU table: {} ({} steps, {}..{})",
+        gpu_freqs_source,
+        gpu.freqs.len(),
+        fmt_hz(gpu.freqs[0]),
+        fmt_hz(*gpu.freqs.last().unwrap()),
     );
 
     println!(
@@ -265,14 +274,14 @@ let mut s = shared.write().unwrap();
     let cpu2_min_normal = CPU2_FREQS[0];
     let cpu5_min_normal = CPU5_FREQS[0];
     let cpu7_min_normal = CPU7_FREQS[0];
-    let gpu_min_normal = GPU_FREQS[0];
+    let gpu_min_normal = gpu.freqs[0];
 
     // Game mins = mid frequency (~50%)
     let cpu0_min_game = mid_freq(CPU0_FREQS);
     let cpu2_min_game = mid_freq(CPU2_FREQS);
     let cpu5_min_game = mid_freq(CPU5_FREQS);
     let cpu7_min_game = mid_freq(CPU7_FREQS);
-    let gpu_min_game = mid_freq(GPU_FREQS);
+    let gpu_min_game = mid_freq(gpu.freqs);
 
     let cluster0 = [0usize, 1usize];
     let cluster2 = [2usize, 3usize, 4usize];
