@@ -1,9 +1,10 @@
 use std::{fs, io, path::PathBuf, time::{Duration, Instant}};
 
 const SPLIT_CHARGE_RECHECK_EVERY: Duration = Duration::from_secs(90);
+const PREFERRED_NODE: &str = "/sys/class/qcom-battery/battery_charging_enabled";
 const CANDIDATE_NODES: &[&str] = &[
+    PREFERRED_NODE,
     "/sys/class/power_supply/battery/charging_enabled",
-    "/sys/class/qcom-battery/battery_charging_enabled",
     "/sys/class/qcom-battery/charging_enabled",
     "/sys/class/qcom-battery/charge_mode",
     "/sys/module/zte_misc/parameters/charging_enabled",
@@ -21,7 +22,6 @@ pub struct SplitChargeStatus {
 #[derive(Debug, Default)]
 pub struct SplitChargeController {
     active_node: Option<PathBuf>,
-    original_value: Option<String>,
     active_package: Option<String>,
     target_stop_battery_percent: Option<u8>,
     last_recheck: Option<Instant>,
@@ -43,7 +43,9 @@ impl SplitChargeController {
 
     pub fn sync(&mut self, desired: DesiredSplitCharge, now: Instant) {
         if !desired.should_enable {
-            self.restore();
+            if let Err(e) = self.enforce_normal_charge() {
+                self.last_error = Some(e);
+            }
             return;
         }
 
@@ -69,12 +71,9 @@ impl SplitChargeController {
 
     fn activate(&mut self, desired: &DesiredSplitCharge) -> Result<(), String> {
         let node = detect_writable_node().ok_or_else(|| "No writable charge toggle node found".to_string())?;
-        let original = fs::read_to_string(&node)
-            .map_err(|e| format!("read {} failed: {}", node.display(), e))?;
         write_zero(&node).map_err(|e| format!("write {} failed: {}", node.display(), e))?;
 
         self.active_node = Some(node);
-        self.original_value = Some(original);
         self.active_package = desired.package.clone();
         self.target_stop_battery_percent = Some(desired.stop_battery_percent);
         self.last_error = None;
@@ -91,23 +90,31 @@ impl SplitChargeController {
         Ok(())
     }
 
-    fn restore(&mut self) {
-        if let (Some(node), Some(original)) = (self.active_node.as_ref(), self.original_value.as_ref()) {
-            if let Err(e) = fs::write(node, original.as_bytes()) {
-                self.last_error = Some(format!("restore {} failed: {}", node.display(), e));
+    fn enforce_normal_charge(&mut self) -> Result<(), String> {
+        let node = self.active_node.clone().or_else(detect_writable_node);
+        if let Some(node) = node {
+            let cur = fs::read_to_string(&node)
+                .map_err(|e| format!("read {} failed: {}", node.display(), e))?;
+            if cur.trim() != "1" {
+                write_one(&node).map_err(|e| format!("enable {} failed: {}", node.display(), e))?;
+                let after = fs::read_to_string(&node)
+                    .map_err(|e| format!("readback {} failed: {}", node.display(), e))?;
+                if after.trim() != "1" {
+                    write_one(&node).map_err(|e| format!("retry enable {} failed: {}", node.display(), e))?;
+                }
             }
         }
         self.active_node = None;
-        self.original_value = None;
         self.active_package = None;
         self.target_stop_battery_percent = None;
         self.last_recheck = None;
+        Ok(())
     }
 }
 
 impl Drop for SplitChargeController {
     fn drop(&mut self) {
-        self.restore();
+        let _ = self.enforce_normal_charge();
     }
 }
 
@@ -131,4 +138,8 @@ fn detect_writable_node() -> Option<PathBuf> {
 
 fn write_zero(path: &PathBuf) -> io::Result<()> {
     fs::write(path, b"0\n")
+}
+
+fn write_one(path: &PathBuf) -> io::Result<()> {
+    fs::write(path, b"1\n")
 }
