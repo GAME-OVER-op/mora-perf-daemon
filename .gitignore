@@ -1,0 +1,12 @@
+/target/
+/dist/
+/.gradle/
+/build/
+/app/build/
+/local.properties
+*.apk
+*.apks
+*.aab
+*.idsig
+*.profraw
+*.profdata

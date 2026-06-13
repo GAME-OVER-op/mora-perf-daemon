@@ -1,0 +1,46 @@
+{
+  "api_token": "248e1673c9daf492bc8500685b0f851d3693a461eef5c2046599d2470b5fe7bc664",
+  "daemon_notifications": false,
+  "use_phone_cooler": true,
+  "battery_saver": {
+    "enabled": true
+  },
+  "charging": {
+    "enabled": true,
+    "fan_led": null,
+    "external_led": null
+  },
+  "notifications": {
+    "enabled": true,
+    "stop_condition": {
+      "type": "until_screen_on"
+    },
+    "for_seconds": 10,
+    "external_led": {
+      "mode": "flashing",
+      "color": "blue"
+    }
+  },
+  "fan_led": {
+    "default_mode": "steady",
+    "default_color": "mixed_7"
+  },
+  "profiles": [
+    {
+      "name": "Normal",
+      "type": "normal",
+      "priority": 1,
+      "enabled": true,
+      "fan_led": null,
+      "external_led": null
+    },
+    {
+      "name": "Gaming",
+      "type": "gaming",
+      "priority": 10,
+      "enabled": true,
+      "fan_led": null,
+      "external_led": null
+    }
+  ]
+}

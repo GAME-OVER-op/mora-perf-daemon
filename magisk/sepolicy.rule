@@ -1,0 +1,6 @@
+# perf_daemon runs as: u:r:magisk:s0
+# LED sysfs nodes are: u:object_r:sysfs:s0
+
+allow magisk sysfs:dir { search open read getattr };
+allow magisk sysfs:file { open read write getattr ioctl };
+allow magisk sysfs:lnk_file { read getattr };
