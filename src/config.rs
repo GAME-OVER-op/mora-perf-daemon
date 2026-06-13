@@ -61,7 +61,7 @@ pub const ENFORCE_ACTIVE: u64 = 6;
 pub const ENFORCE_IDLE: u64 = 18;
 // Reduce wakeups/`cmd` calls to keep CPU usage low.
 // Charging probe interval is adaptive (see main.rs), so there's no single constant here.
-pub const GAME_CHECK_EVERY: u64 = 8;
+pub const GAME_CHECK_EVERY: u64 = 15;
 
 // Suspicious background proc scan
 pub const BG_CPU_THRESHOLD_PCT: u8 = 15;

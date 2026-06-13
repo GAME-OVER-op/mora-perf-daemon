@@ -313,17 +313,17 @@ let mut s = shared.write().unwrap();
     // If battery percent is unknown, use 10s.
     let chg_check_every = |pct: Option<u8>| -> Duration {
         match pct {
-            Some(p) if p > 80 => Duration::from_secs(15),
-            Some(p) if p > 50 => Duration::from_secs(10),
-            Some(_) => Duration::from_secs(5),
-            None => Duration::from_secs(10),
+            Some(p) if p > 80 => Duration::from_secs(30),
+            Some(p) if p > 50 => Duration::from_secs(20),
+            Some(_) => Duration::from_secs(10),
+            None => Duration::from_secs(20),
         }
     };
 
     let mut battery_percent: Option<u8> = None;
     let mut last_batt_check = Instant::now();
     // Battery percent is slow-changing; poll rarely to reduce wakeups.
-    let batt_check_every = Duration::from_secs(60);
+    let batt_check_every = Duration::from_secs(120);
 
     let mut game_mode = false;
     // Minimum fan level while current foreground game is active (2..=5). Default matches config::GAME_FAN_BASE.
@@ -638,21 +638,6 @@ let mut s = shared.write().unwrap();
         // ------------------------------
         // Smart battery saver (CPU core hotplug)
         // ------------------------------
-        // Average utilization across the base 5 cores (cpu0..cpu4), counting only online CPUs.
-        let base_util: u8 = {
-            let mut sum: u32 = 0;
-            let mut n: u32 = 0;
-            for c in 0usize..=4usize {
-                if is_cpu_online(c) {
-                    if let Some(&u) = cpu_utils.get(c) {
-                        sum += u as u32;
-                        n += 1;
-                    }
-                }
-            }
-            if n == 0 { 0 } else { (sum / n) as u8 }
-        };
-
         let bs_enabled = cfg.battery_saver.enabled;
         let mut offline_by_battery: Vec<usize> = Vec::new();
         let mut offline_by_screen_off: Vec<usize> = Vec::new();
@@ -674,6 +659,24 @@ let mut s = shared.write().unwrap();
         }
 
         let battery_baseline_off = !offline_by_battery.is_empty();
+
+        // Average utilization across base cores is only needed when battery saver
+        // would actually park cores. Avoid extra sysfs reads in the normal >50% path.
+        let base_util: u8 = if battery_baseline_off {
+            let mut sum: u32 = 0;
+            let mut n: u32 = 0;
+            for c in 0usize..=4usize {
+                if is_cpu_online(c) {
+                    if let Some(&u) = cpu_utils.get(c) {
+                        sum += u as u32;
+                        n += 1;
+                    }
+                }
+            }
+            if n == 0 { 0 } else { (sum / n) as u8 }
+        } else {
+            0
+        };
 
         if !bs_enabled || charging || game_mode || !battery_baseline_off {
             // Feature disabled / not applicable => reset battery-saver state.
@@ -943,13 +946,19 @@ let mut s = shared.write().unwrap();
             TempZone::B56 | TempZone::B57 | TempZone::B58 => 450,
             _ => {
                 if idle_mode {
-                    6500
+                    15000
                 } else if any_write || any_step {
                     750
+                } else if game_mode || charging_effective {
+                    if stable_for >= Duration::from_secs(30) { 3000 } else { 1500 }
+                } else if !screen_on {
+                    12000
+                } else if stable_for >= Duration::from_secs(60) {
+                    8000
                 } else if stable_for >= Duration::from_secs(30) {
-                    3000
+                    5000
                 } else {
-                    1500
+                    2000
                 }
             }
         };

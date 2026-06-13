@@ -40,7 +40,7 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, path: PathBuf) {
             }
 
             // Changes are rare; poll slowly.
-            thread::sleep(Duration::from_millis(8000));
+            thread::sleep(Duration::from_secs(30));
         }
     });
 }

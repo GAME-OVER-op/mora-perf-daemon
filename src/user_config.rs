@@ -198,7 +198,10 @@ pub struct NotificationsConfig {
 impl Default for NotificationsConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            // Disabled by default: polling `cmd notification list` is framework-heavy
+            // and creates permanent low CPU usage. Users can enable it from the UI
+            // only when notification LED reaction is needed.
+            enabled: false,
             stop_condition: StopConditionWrapper {
                 kind: NotificationsStopKind::UntilScreenOn,
             },

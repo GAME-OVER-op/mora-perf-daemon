@@ -96,12 +96,23 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
         let cmd = cmd_bin();
         let su = su_bin();
 
-        let mut prev = match snapshot(&cmd, &su) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("NOTIF: initial snapshot error: {}", e);
-                HashSet::new()
+        // Do not run the expensive framework command at startup when the feature
+        // is disabled. The module config now ships with notifications.enabled=false,
+        // so this avoids a permanent `cmd notification list` baseline cost.
+        let initially_enabled = {
+            let s = shared.read().unwrap();
+            s.config.notifications.enabled
+        };
+        let mut prev = if initially_enabled {
+            match snapshot(&cmd, &su) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("NOTIF: initial snapshot error: {}", e);
+                    HashSet::new()
+                }
             }
+        } else {
+            HashSet::new()
         };
 
         let mut active = false;
@@ -148,16 +159,15 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
                     s.leds.external_started_at = None;
                 }
 
-                // Keep snapshot in sync to avoid immediate retrigger when re-enabled,
-                // but do it rarely to save power.
-                if last_disabled_sync.elapsed() > Duration::from_secs(30) {
-                    if let Ok(snap) = snapshot(&cmd, &su) {
-                        prev = snap;
-                    }
+                // Disabled means no framework polling. This is the important power path:
+                // `cmd notification list` is expensive and should not run in background
+                // unless the feature is explicitly enabled.
+                if last_disabled_sync.elapsed() > Duration::from_secs(300) {
+                    prev.clear();
                     last_disabled_sync = Instant::now();
                 }
 
-                thread::sleep(Duration::from_millis(10000));
+                thread::sleep(Duration::from_secs(30));
                 continue;
             }
 
@@ -236,10 +246,9 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, leds: Arc<Leds>) {
                 }
             }
 
-            // Poll interval: `cmd notification list` is expensive; poll slowly.
-            // Note: `poll()` will still wake immediately on trigger events; this only affects
-            // notification LED reaction time.
-            thread::sleep(Duration::from_millis(10000));
+            // Poll interval: `cmd notification list` is expensive. Keep this slow;
+            // users who enable the feature trade LED reaction speed for lower CPU.
+            thread::sleep(Duration::from_secs(20));
         }
     });
 }

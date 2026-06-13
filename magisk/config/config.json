@@ -11,7 +11,7 @@
     "external_led": null
   },
   "notifications": {
-    "enabled": true,
+    "enabled": false,
     "stop_condition": {
       "type": "until_screen_on"
     },
