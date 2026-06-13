@@ -44,12 +44,36 @@ jobs:
           export AR_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           cargo build --release --target aarch64-linux-android
 
-      - name: Build Android app
-        run: gradle :app:assembleDebug --no-daemon
+      - name: Generate debug keystore for release signing
+        run: |
+          mkdir -p "$RUNNER_TEMP/mora-signing"
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/mora-signing/debug-release.keystore" \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          echo "MORA_RELEASE_KEYSTORE=$RUNNER_TEMP/mora-signing/debug-release.keystore" >> "$GITHUB_ENV"
+          echo "MORA_RELEASE_KEYSTORE_PASSWORD=android" >> "$GITHUB_ENV"
+          echo "MORA_RELEASE_KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
+          echo "MORA_RELEASE_KEY_PASSWORD=android" >> "$GITHUB_ENV"
+
+      - name: Build release Android app
+        run: gradle :app:assembleRelease --no-daemon
+
+      - name: Verify APK signature schemes
+        run: |
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify \
+            --verbose \
+            --print-certs \
+            app/build/outputs/apk/release/app-release.apk
 
       - name: Package Magisk module
         run: |
-          APK_PATH="app/build/outputs/apk/debug/app-debug.apk" \
+          APK_PATH="app/build/outputs/apk/release/app-release.apk" \
           RUST_BIN="target/aarch64-linux-android/release/perf_daemon" \
           ZIP_NAME="mora_perf_deamon-${GITHUB_SHA}.zip" \
           ./scripts/package_magisk.sh
@@ -61,4 +85,4 @@ jobs:
           path: |
             dist/*.zip
             target/aarch64-linux-android/release/perf_daemon
-            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk

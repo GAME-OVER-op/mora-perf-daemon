@@ -20,9 +20,26 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+
+    signingConfigs {
+        create("releaseDebugKey") {
+            val keystorePath = System.getenv("MORA_RELEASE_KEYSTORE")
+                ?: "${rootProject.buildDir}/generated-debug-release.keystore"
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("MORA_RELEASE_KEYSTORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("MORA_RELEASE_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("MORA_RELEASE_KEY_PASSWORD") ?: "android"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = false
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("releaseDebugKey")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
