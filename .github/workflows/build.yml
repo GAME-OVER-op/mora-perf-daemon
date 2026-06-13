@@ -28,6 +28,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install Android platform and NDK
         run: |
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018"
@@ -40,9 +43,7 @@ jobs:
           cargo build --release --target aarch64-linux-android
 
       - name: Build Android app
-        run: |
-          chmod +x ./gradlew
-          ./gradlew :app:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon
 
       - name: Package Magisk module
         run: |
