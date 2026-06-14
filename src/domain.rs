@@ -132,9 +132,14 @@ impl Domain {
         self.last_util = util;
 
         let mut jump_up: usize = 0;
-        if util >= self.high_jump4 || delta >= self.spike_delta4 {
+        // Do not treat tiny absolute load as a spike. Previously a jump like
+        // 2% -> 22% could raise caps even though the device was practically idle,
+        // causing constant cap/log churn in normal screen-on usage.
+        let spike_floor = self.up_util.saturating_sub(20);
+        let spike_allowed = util >= spike_floor;
+        if util >= self.high_jump4 || (spike_allowed && delta >= self.spike_delta4) {
             jump_up = 4;
-        } else if util >= self.high_jump2 || delta >= self.spike_delta2 {
+        } else if util >= self.high_jump2 || (spike_allowed && delta >= self.spike_delta2) {
             jump_up = 2;
         } else if util >= self.up_util {
             jump_up = 1;
@@ -230,12 +235,9 @@ impl Domain {
         if target_idx != self.last_applied_idx || target_freq != self.last_applied_freq || (force_check && wrote_max) {
             self.last_applied_idx = target_idx;
             self.last_applied_freq = target_freq;
-
-            if self.is_gpu {
-                println!("{}: cap {}", self.label, fmt::fmt_hz(target_freq));
-            } else {
-                println!("{}: cap {}", self.label, fmt::fmt_khz(target_freq));
-            }
+            // Keep routine cap changes quiet. Printing every small cap adjustment
+            // wakes logcat and made the daemon look permanently busy. Important
+            // mode/state transitions are still logged from main.rs.
         }
 
         Ok(wrote_max)

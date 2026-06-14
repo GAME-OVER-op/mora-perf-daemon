@@ -612,12 +612,6 @@ impl TriggerManager {
         self.inner.right_enabled.store(cfg.right.enabled, Ordering::SeqCst);
         self.inner.active.store(true, Ordering::SeqCst);
 
-        println!(
-            "TRIGCFG: set left={} px=({}, {}) raw=({}, {}) | right={} px=({}, {}) raw=({}, {})",
-            cfg.left.enabled, cfg.left.x_px, cfg.left.y_px, lx, ly,
-            cfg.right.enabled, cfg.right.x_px, cfg.right.y_px, rx, ry
-        );
-
         self.bump_gen();
     }
 
@@ -693,7 +687,6 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
                     let mut uif = inner.uif.lock().unwrap();
                     let _ = touch_up(&mut uif, slot);
                     dec_active(&inner);
-                    println!("TRIG: {} UP(reconfig)", if slot == 0 { "L" } else { "R" });
                     pressed = false;
                 }
                 abs_state = None;
@@ -763,7 +756,7 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
                 {
                     let mut uif = inner.uif.lock().unwrap();
                     match touch_down(&mut uif, slot, tid, x, y, inner.touch_major) {
-                        Ok(_) => println!("TRIG: {} DOWN tid={} raw=({}, {})", if slot == 0 { "L" } else { "R" }, tid, x, y),
+                        Ok(_) => (),
                         Err(e) => eprintln!("TRIG: touch_down failed: {}", e),
                     }
                 }
@@ -778,7 +771,6 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
                         let _ = touch_up(&mut uif, slot);
                     }
                     dec_active(&inner);
-                    println!("TRIG: {} UP", if slot == 0 { "L" } else { "R" });
                     pressed = false;
                     abs_state = None;
                     key_state = None;

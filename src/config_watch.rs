@@ -44,7 +44,7 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, path: PathBuf) {
             }
 
             // Config changes are rare; poll slowly to reduce wakeups.
-            thread::sleep(Duration::from_secs(30));
+            thread::sleep(Duration::from_secs(120));
         }
     });
 }

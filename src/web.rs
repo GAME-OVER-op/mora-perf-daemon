@@ -1030,7 +1030,7 @@ refreshCfg();
 let tickTimer = null;
 function startTicker(){
   if(tickTimer) clearInterval(tickTimer);
-  const ms = document.hidden ? 5000 : 1200;
+  const ms = document.hidden ? 15000 : 3000;
   tickTimer = setInterval(tick, ms);
 }
 document.addEventListener('visibilitychange', startTicker);

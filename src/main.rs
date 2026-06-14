@@ -84,10 +84,10 @@ fn is_cpu_online(cpu: usize) -> bool {
     sysfs::read_u64(&p).unwrap_or(1) == 1
 }
 
-fn set_cpu_online(cpu: usize, online: bool, cache_u64: &mut HashMap<PathBuf, u64>) {
+fn set_cpu_online(cpu: usize, online: bool, cache_u64: &mut HashMap<PathBuf, u64>, force_check: bool) {
     let p = cpu_online_path(cpu);
     let target = if online { 1u64 } else { 0u64 };
-    let _ = write_u64_if_needed(&p, target, cache_u64, true);
+    let _ = write_u64_if_needed(&p, target, cache_u64, force_check);
 }
 
 fn battery_saver_disable_delay(override_dur: Duration) -> Duration {
@@ -346,14 +346,37 @@ let mut s = shared.write().unwrap();
     let mut proc_watch = ProcWatch::new();
     let mut last_proc_check = Instant::now();
     // Background proc scan is expensive; do it rarely.
-    let proc_check_active = Duration::from_secs(10);
-    let proc_check_idle = Duration::from_secs(10);
+    let proc_check_active = Duration::from_secs(30);
+    let proc_check_idle = Duration::from_secs(60);
 
     let mut suspicious: HashMap<String, u8> = HashMap::new();
     let long_off_threshold = Duration::from_secs(LONG_OFF_NOTIFY_SECS);
 
     let mut last_loop = Instant::now();
     let mut stable_for = Duration::ZERO;
+    let mut last_stat_log = Instant::now() - Duration::from_secs(3600);
+    let stat_log_every = Duration::from_secs(120);
+
+    // Decouple heavy sensors from the main control loop. Thermal reads touch many
+    // sysfs nodes; util reads parse /proc/stat and GPU sysfs. Keep cached values
+    // and refresh faster only when gaming/charging/hot/recently active.
+    let mut last_thermal_check = Instant::now() - Duration::from_secs(3600);
+    let mut cpu_avg_mc: Option<i32> = None;
+    let mut gpu_avg_mc: Option<i32> = None;
+    let mut batt_temp_mc: Option<i32> = None;
+    let mut control_temp_mc: Option<i32> = None;
+
+    let mut last_util_check = Instant::now() - Duration::from_secs(3600);
+    let mut ug: u8 = 0;
+    let mut u0: u8 = 0;
+    let mut u2: u8 = 0;
+    let mut u5: u8 = 0;
+    let mut u7: u8 = 0;
+    let mut max_cpu_cluster: u8 = 0;
+    let mut cpu_utils: Vec<u8> = Vec::new();
+
+    let mut last_core_force_check = Instant::now() - Duration::from_secs(3600);
+    let core_force_check_every = Duration::from_secs(120);
 
     // Cache config and only clone when it changes (config_watch bumps config_rev).
     let mut cfg_cache = { shared.read().unwrap().config.clone() };
@@ -574,37 +597,76 @@ let mut s = shared.write().unwrap();
             }
         }
 
-        // temps (AVG) and battery temperature for thermal control
-        let cpu_avg_mc = read_avg_temp_mc(&cpu_paths);
-        let gpu_avg_mc = read_avg_temp_mc(&gpu_paths);
-        let batt_temp_mc = bat_path.as_ref().and_then(|p| sysfs::read_i32(p));
-        let control_temp_mc = read_control_temp_mc(batt_temp_mc, cpu_avg_mc, gpu_avg_mc);
-
-        let zone = if let Some(t) = control_temp_mc {
-            zone_with_hysteresis(t, last_zone)
-        } else {
-            last_zone
+        // temps (AVG) and battery temperature for thermal control. Read slower in
+        // cool/stable states; speed up while hot, charging, or in game mode.
+        let thermal_every = match last_zone {
+            TempZone::B56 | TempZone::B57 | TempZone::B58 => Duration::from_secs(2),
+            TempZone::B55 => Duration::from_secs(4),
+            _ => {
+                if game_mode || charging {
+                    Duration::from_secs(8)
+                } else if !screen_on {
+                    Duration::from_secs(45)
+                } else if stable_for >= Duration::from_secs(60) {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::from_secs(12)
+                }
+            }
         };
 
-        if zone != last_zone {
-            let c = cpu_avg_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
-            let g = gpu_avg_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
-            let b = batt_temp_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
-            let u = control_temp_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
-            println!("TEMP: batt {} | cpu {} | gpu {} | use {} -> {:?} (reduce {}%)", b, c, g, u, zone, zone.reduction_percent());
-            last_zone = zone;
+        if now.duration_since(last_thermal_check) >= thermal_every {
+            cpu_avg_mc = read_avg_temp_mc(&cpu_paths);
+            gpu_avg_mc = read_avg_temp_mc(&gpu_paths);
+            batt_temp_mc = bat_path.as_ref().and_then(|p| sysfs::read_i32(p));
+            control_temp_mc = read_control_temp_mc(batt_temp_mc, cpu_avg_mc, gpu_avg_mc);
+            last_thermal_check = now;
+
+            let zone = if let Some(t) = control_temp_mc {
+                zone_with_hysteresis(t, last_zone)
+            } else {
+                last_zone
+            };
+
+            if zone != last_zone {
+                let c = cpu_avg_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
+                let g = gpu_avg_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
+                let b = batt_temp_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
+                let u = control_temp_mc.map(fmt_c).unwrap_or_else(|| "?".to_string());
+                println!("TEMP: batt {} | cpu {} | gpu {} | use {} -> {:?} (reduce {}%)", b, c, g, u, zone, zone.reduction_percent());
+                last_zone = zone;
+            }
         }
+        let zone = last_zone;
 
-        // GPU util
-        let ug = read_gpu_util_any(gpu_busy_percent_path.as_deref(), gpubusy_path);
+        // CPU/GPU util. In cool stable non-game states, reuse cached util for a
+        // few seconds instead of parsing /proc/stat and GPU sysfs every loop.
+        let util_every = match zone {
+            TempZone::B56 | TempZone::B57 | TempZone::B58 => Duration::from_secs(1),
+            TempZone::B55 => Duration::from_secs(2),
+            _ => {
+                if game_mode || charging {
+                    Duration::from_secs(2)
+                } else if !screen_on {
+                    Duration::from_secs(15)
+                } else if stable_for >= Duration::from_secs(60) {
+                    Duration::from_secs(10)
+                } else {
+                    Duration::from_secs(4)
+                }
+            }
+        };
 
-        // CPU util
-        let cpu_utils = cpu_utils_by_core(&mut prev_cpu).unwrap_or_default();
-        let u0 = avg_util(&cpu_utils, &cluster0);
-        let u2 = avg_util(&cpu_utils, &cluster2);
-        let u5 = avg_util(&cpu_utils, &cluster5);
-        let u7 = avg_util(&cpu_utils, &cluster7);
-        let max_cpu_cluster = u0.max(u2).max(u5).max(u7);
+        if now.duration_since(last_util_check) >= util_every {
+            ug = read_gpu_util_any(gpu_busy_percent_path.as_deref(), gpubusy_path);
+            cpu_utils = cpu_utils_by_core(&mut prev_cpu).unwrap_or_default();
+            u0 = avg_util(&cpu_utils, &cluster0);
+            u2 = avg_util(&cpu_utils, &cluster2);
+            u5 = avg_util(&cpu_utils, &cluster5);
+            u7 = avg_util(&cpu_utils, &cluster7);
+            max_cpu_cluster = u0.max(u2).max(u5).max(u7);
+            last_util_check = now;
+        }
 
         // bg scan (screen OFF)
         let mut bg_over = false;
@@ -745,9 +807,12 @@ let mut s = shared.write().unwrap();
         }
         desired_offline.sort_unstable();
 
-        // Apply desired core states (manage cpu5..cpu7 only).
+        // Apply desired core states (manage cpu5..cpu7 only). Avoid reading
+        // cpu*/online every loop; force-check rarely in case another service changed it.
+        let core_force_check = now.duration_since(last_core_force_check) >= core_force_check_every;
+        if core_force_check { last_core_force_check = now; }
         for &c in &[5usize, 6, 7] {
-            set_cpu_online(c, !desired_offline.contains(&c), &mut cache_u64);
+            set_cpu_online(c, !desired_offline.contains(&c), &mut cache_u64, core_force_check);
         }
 
         bs_disabled_cores = offline_by_battery.clone();
@@ -869,8 +934,11 @@ let mut s = shared.write().unwrap();
         any_write |= cpu7.apply(effective_zone, &mut cache_u64, force_check).unwrap_or(false);
         any_write |= gpu.apply(effective_zone, &mut cache_u64, force_check).unwrap_or(false);
 
-        // STAT
-        if force_check {
+        // STAT: human-readable status is useful but logcat I/O is not free.
+        // Keep it slow and independent from the cap enforcement interval.
+        let stat_log_due = now.duration_since(last_stat_log) >= stat_log_every;
+        if stat_log_due {
+            last_stat_log = now;
             let c = cpu_avg_mc.map(|v| v as f32 / 1000.0);
             let g = gpu_avg_mc.map(|v| v as f32 / 1000.0);
             let u = control_temp_mc.map(|v| v as f32 / 1000.0);
