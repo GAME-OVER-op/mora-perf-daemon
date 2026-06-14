@@ -140,16 +140,16 @@ fn set_nubia_parts_fan_enable(enable: bool) {
         self.level = next;
 
         if self.level == 0 {
-            let _ = sysfs::write_u64_if_needed(&self.enable_path, 0, cache, false);
+            let _ = sysfs::write_u64_if_needed(&self.enable_path, 0, cache, true);
             if prev != 0 { Self::set_nubia_parts_fan_enable(false); }
             println!("FAN: off");
             return;
         }
 
         let lvl = self.level as u64;
-        let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, false);
-        let _ = sysfs::write_u64_if_needed(&self.level_path, lvl, cache, false);
-        let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, false);
+        let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, true);
+        let _ = sysfs::write_u64_if_needed(&self.level_path, lvl, cache, true);
+        let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, true);
         println!("FAN: {}", self.level);
     }
 }
