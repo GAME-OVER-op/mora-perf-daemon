@@ -19,6 +19,7 @@ mod profiles;
 mod screen;
 mod services;
 mod split_charge;
+mod swap;
 mod state;
 mod sysfs;
 mod tempzone;
@@ -106,6 +107,7 @@ fn battery_saver_disable_delay(override_dur: Duration) -> Duration {
 const SCREEN_OFF_CORE_SAVER_SECS: u64 = 30 * 60;
 
 fn main() {
+    swap::init_silent();
     println!("mora_perf_daemon starting");
 
     disable_thermal_services();
