@@ -802,6 +802,11 @@ fn spawn_forwarder(inner: Arc<Inner>, touch_path: PathBuf, finger_slot_max: i32)
         let slots = (finger_slot_max.max(1) as usize) + 4;
         let mut finger_tid: Vec<i32> = vec![-1; slots];
         let mut cur_slot: usize = 0;
+        // Real-device slot in effect when the current frame opened. MT-B drivers
+        // omit ABS_MT_SLOT when it is unchanged, and trigger threads move the
+        // shared uinput slot pointer between our frames, so we must re-assert this
+        // at flush time.
+        let mut frame_open_slot: i32 = 0;
         // Buffered (type, code, value) of the current frame, minus BTN_* and SYN.
         let mut frame: Vec<(u16, u16, i32)> = Vec::with_capacity(64);
 
@@ -846,14 +851,26 @@ fn spawn_forwarder(inner: Arc<Inner>, touch_path: PathBuf, finger_slot_max: i32)
                 // Flush the frame atomically so trigger writes never interleave
                 // inside a finger report.
                 let mut uif = inner.uif.lock().unwrap();
+                // Re-assert the slot the real device was on when this frame opened.
+                // Without it, buffered finger axes could land on a trigger slot
+                // (the slot pointer is sticky and shared), leaking a stuck contact
+                // that Android renders as a hovering pointer (hollow ring).
+                let _ = emit(&mut uif, EV_ABS, ABS_MT_SLOT, frame_open_slot);
                 for &(ty, code, value) in &frame {
                     let _ = emit(&mut uif, ty, code, value);
                 }
-                let count = inner.contact_count();
+                // Authoritative finger count from real slot occupancy (immune to
+                // counter drift), plus live trigger contacts. This guarantees
+                // BTN_TOUCH is never 0 while any slot still holds a contact.
+                let nf = finger_tid.iter().filter(|&&t| t >= 0).count() as i32;
+                inner.finger_count.store(nf, Ordering::SeqCst);
+                let count = nf + inner.virt_active.load(Ordering::SeqCst).max(0);
                 let _ = set_tool_buttons(&mut uif, count);
                 let _ = syn(&mut uif);
                 drop(uif);
                 frame.clear();
+                // Next frame opens on whatever slot this frame ended on (sticky).
+                frame_open_slot = cur_slot as i32;
                 continue;
             }
 
