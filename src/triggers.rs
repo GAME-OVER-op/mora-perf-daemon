@@ -1,10 +1,35 @@
-//! Hardware shoulder triggers -> virtual touch via /dev/uinput.
+//! Hardware shoulder triggers -> virtual touch, merged with real finger touches.
 //!
-//! Low-level trigger handling is kept as close as possible to the user's
-//! working `4.zip` project: the trigger side listens to BOTH `EV_ABS/ABS_DISTANCE`
-//! and `EV_KEY/KEY_F7|KEY_F8`, with release confirmed by both signals.
+//! ## Why this exists / what changed
+//! The previous implementation created a SEPARATE uinput touch device and let the
+//! real touchscreen keep feeding Android directly. Android then saw TWO multitouch
+//! devices and routed a window's gesture to whichever device most recently started
+//! a contact, dropping the other one. Result: pressing a trigger killed finger
+//! touch and vice-versa ("either touch OR triggers").
 //!
-//! The only higher-level logic kept from mora is config gating:
+//! ## New architecture: GRAB + MERGE through ONE virtual device
+//! 1. We `EVIOCGRAB` the real touchscreen (exclusive). Fingers no longer reach
+//!    Android directly; only this daemon reads them.
+//! 2. We create ONE uinput multitouch device that mirrors the real touchscreen
+//!    ranges, with the slot space extended by 2 reserved trigger slots.
+//! 3. A forwarder thread re-emits every real finger frame verbatim into the
+//!    virtual device (finger slots `0..=slot_max`).
+//! 4. Trigger threads inject their touches into the SAME virtual device on the
+//!    reserved slots (`slot_max+1` = left, `slot_max+2` = right).
+//!
+//! Android now sees a SINGLE device, so fingers and triggers are just different
+//! slots of one contact report — like real extra fingers. Neither cancels the
+//! other. `BTN_TOUCH` and the `BTN_TOOL_*` tap buttons are managed centrally from
+//! the combined (finger + trigger) contact count so the two streams never fight
+//! over the global "is anything touching" flag.
+//!
+//! ## Safety
+//! If the touchscreen can't be grabbed, merge is skipped and triggers stay off
+//! (we never fall back to the broken two-device mode). On forwarder exit / Drop we
+//! `EVIOCGRAB(0)` to restore native touch. With `panic = "abort"`, any panic also
+//! closes the fd, and the kernel auto-ungrabs.
+//!
+//! Higher-level config gating is unchanged:
 //! - active only for the current foreground game
 //! - active only when triggers are enabled in that game's config
 //! - coordinates come from the game config (screen px -> mapped to raw touch range)
@@ -45,12 +70,16 @@ const ABS_MT_TRACKING_ID: u16 = 0x39;
 const KEY_F7: u16 = 65;
 const KEY_F8: u16 = 66;
 
-const BTN_TOOL_FINGER: u16 = 325;
-const BTN_TOUCH: u16 = 330;
+const BTN_TOUCH: u16 = 0x14a; // 330
+const BTN_TOOL_FINGER: u16 = 0x145; // 325
+const BTN_TOOL_QUINTTAP: u16 = 0x148; // 328
+const BTN_TOOL_DOUBLETAP: u16 = 0x14d; // 333
+const BTN_TOOL_TRIPLETAP: u16 = 0x14e; // 334
+const BTN_TOOL_QUADTAP: u16 = 0x14f; // 335
 
 const INPUT_PROP_DIRECT: u16 = 0x01;
 
-// ----------------- uinput ioctls -----------------
+// ----------------- uinput / evdev ioctls -----------------
 const IOC_NRBITS: u32 = 8;
 const IOC_TYPEBITS: u32 = 8;
 const IOC_SIZEBITS: u32 = 14;
@@ -77,6 +106,9 @@ const UI_SET_ABSBIT: u32 = iow(b'U', 103, 4);
 const UI_SET_PROPBIT: u32 = iow(b'U', 110, 4);
 const UI_DEV_CREATE: u32 = io(b'U', 1);
 const UI_DEV_DESTROY: u32 = io(b'U', 2);
+
+// _IOW('E', 0x90, int) -- exclusive grab of an evdev device.
+const EVIOCGRAB: u32 = iow(b'E', 0x90, 4);
 
 const BUS_VIRTUAL: u16 = 0x06;
 
@@ -213,19 +245,31 @@ fn scan_input_devices() -> io::Result<Vec<EventDevInfo>> {
     Ok(out)
 }
 
-fn choose_devices(devs: &[EventDevInfo]) -> io::Result<(EventDevInfo, EventDevInfo, Option<EventDevInfo>)> {
+fn choose_devices(
+    devs: &[EventDevInfo],
+) -> io::Result<(EventDevInfo, EventDevInfo, Option<EventDevInfo>)> {
     let left = devs
         .iter()
         .filter(|d| d.has_abs_distance && d.has_key_f7)
         .max_by_key(|d| (d.name.contains("sar0") as i32, d.name.contains("nubia_tgk_aw") as i32))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "left trigger device (ABS_DISTANCE+KEY_F7) not found"))?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "left trigger device (ABS_DISTANCE+KEY_F7) not found",
+            )
+        })?
         .clone();
 
     let right = devs
         .iter()
         .filter(|d| d.has_abs_distance && d.has_key_f8)
         .max_by_key(|d| (d.name.contains("sar1") as i32, d.name.contains("nubia_tgk_aw") as i32))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "right trigger device (ABS_DISTANCE+KEY_F8) not found"))?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "right trigger device (ABS_DISTANCE+KEY_F8) not found",
+            )
+        })?
         .clone();
 
     let touch = devs
@@ -236,7 +280,6 @@ fn choose_devices(devs: &[EventDevInfo]) -> io::Result<(EventDevInfo, EventDevIn
 
     Ok((left, right, touch))
 }
-
 
 // abs sysfs attributes: /sys/class/input/eventX/device/abs/abs_mt_position_x etc.
 // Content is usually: "<value> <min> <max> <fuzz> <flat>"
@@ -286,7 +329,8 @@ fn discover_ranges(touch: &Option<EventDevInfo>) -> Ranges {
         let (y_min, y_max) = read_abs_range(&t.sysdir, "abs_mt_position_y")
             .or_else(|| read_abs_range(&t.sysdir, "abs_y"))
             .unwrap_or((0, 39680));
-        let (_, touch_major_max) = read_abs_range(&t.sysdir, "abs_mt_touch_major").unwrap_or((0, 4080));
+        let (_, touch_major_max) =
+            read_abs_range(&t.sysdir, "abs_mt_touch_major").unwrap_or((0, 4080));
         let (_, slot_max) = read_abs_range(&t.sysdir, "abs_mt_slot").unwrap_or((0, 9));
         return Ranges {
             x_min,
@@ -307,7 +351,7 @@ fn discover_ranges(touch: &Option<EventDevInfo>) -> Ranges {
     }
 }
 
-// ----------------- uinput setup -----------------
+// ----------------- open / ioctl helpers -----------------
 fn open_event_dev(path: &Path) -> io::Result<fs::File> {
     fs::OpenOptions::new()
         .read(true)
@@ -348,14 +392,26 @@ fn write_struct<T>(f: &mut fs::File, s: &T) -> io::Result<()> {
     f.write_all(bytes)
 }
 
+/// Create the merged virtual touchscreen. Slot space is extended by 2 so the two
+/// trigger contacts live on dedicated slots (`slot_max+1`, `slot_max+2`) that real
+/// fingers never use.
 fn make_uinput_touch(mut uif: fs::File, ranges: &Ranges) -> io::Result<fs::File> {
     let fd = uif.as_raw_fd();
 
     xioctl(fd, UI_SET_EVBIT, EV_KEY as c_int)?;
     xioctl(fd, UI_SET_EVBIT, EV_ABS as c_int)?;
+    xioctl(fd, UI_SET_EVBIT, EV_SYN as c_int)?;
 
-    xioctl(fd, UI_SET_KEYBIT, BTN_TOUCH as c_int)?;
-    xioctl(fd, UI_SET_KEYBIT, BTN_TOOL_FINGER as c_int)?;
+    for &btn in &[
+        BTN_TOUCH,
+        BTN_TOOL_FINGER,
+        BTN_TOOL_DOUBLETAP,
+        BTN_TOOL_TRIPLETAP,
+        BTN_TOOL_QUADTAP,
+        BTN_TOOL_QUINTTAP,
+    ] {
+        xioctl(fd, UI_SET_KEYBIT, btn as c_int)?;
+    }
 
     for &abs in &[
         ABS_X,
@@ -393,9 +449,9 @@ fn make_uinput_touch(mut uif: fs::File, ranges: &Ranges) -> io::Result<fs::File>
     uidev.absmin[ABS_Y as usize] = ranges.y_min;
     uidev.absmax[ABS_Y as usize] = ranges.y_max;
 
-    // MT ranges
+    // MT ranges -- extend the slot count by 2 reserved trigger slots.
     uidev.absmin[ABS_MT_SLOT as usize] = 0;
-    uidev.absmax[ABS_MT_SLOT as usize] = ranges.slot_max.max(1);
+    uidev.absmax[ABS_MT_SLOT as usize] = ranges.slot_max.max(1) + 2;
     uidev.absmin[ABS_MT_TOUCH_MAJOR as usize] = 0;
     uidev.absmax[ABS_MT_TOUCH_MAJOR as usize] = ranges.touch_major_max.max(1);
 
@@ -426,7 +482,23 @@ fn syn(uif: &mut fs::File) -> io::Result<()> {
     emit(uif, EV_SYN, SYN_REPORT, 0)
 }
 
-fn touch_down(
+/// Central management of the device-global tap buttons from the COMBINED contact
+/// count (forwarded fingers + injected triggers). This is the key to merging the
+/// two streams: neither side ever drives `BTN_TOUCH` to 0 while the other still
+/// has a live contact.
+fn set_tool_buttons(uif: &mut fs::File, count: i32) -> io::Result<()> {
+    let c = count.max(0);
+    emit(uif, EV_KEY, BTN_TOUCH, (c > 0) as i32)?;
+    emit(uif, EV_KEY, BTN_TOOL_FINGER, (c == 1) as i32)?;
+    emit(uif, EV_KEY, BTN_TOOL_DOUBLETAP, (c == 2) as i32)?;
+    emit(uif, EV_KEY, BTN_TOOL_TRIPLETAP, (c == 3) as i32)?;
+    emit(uif, EV_KEY, BTN_TOOL_QUADTAP, (c == 4) as i32)?;
+    emit(uif, EV_KEY, BTN_TOOL_QUINTTAP, (c >= 5) as i32)?;
+    Ok(())
+}
+
+/// Emit only the MT contact-down axes for a slot (no buttons, no SYN).
+fn mt_contact_down(
     uif: &mut fs::File,
     slot: i32,
     tid: i32,
@@ -434,39 +506,31 @@ fn touch_down(
     y: i32,
     major: i32,
 ) -> io::Result<()> {
-    emit(uif, EV_KEY, BTN_TOUCH, 1)?;
-    emit(uif, EV_KEY, BTN_TOOL_FINGER, 1)?;
     emit(uif, EV_ABS, ABS_MT_SLOT, slot)?;
     emit(uif, EV_ABS, ABS_MT_TRACKING_ID, tid)?;
     emit(uif, EV_ABS, ABS_MT_POSITION_X, x)?;
     emit(uif, EV_ABS, ABS_MT_POSITION_Y, y)?;
     emit(uif, EV_ABS, ABS_MT_TOUCH_MAJOR, major)?;
-    emit(uif, EV_ABS, ABS_X, x)?;
-    emit(uif, EV_ABS, ABS_Y, y)?;
-    syn(uif)?;
     Ok(())
 }
 
-fn touch_up(uif: &mut fs::File, slot: i32) -> io::Result<()> {
+/// Emit only the MT contact-up for a slot (no buttons, no SYN).
+fn mt_contact_up(uif: &mut fs::File, slot: i32) -> io::Result<()> {
     emit(uif, EV_ABS, ABS_MT_SLOT, slot)?;
     emit(uif, EV_ABS, ABS_MT_TRACKING_ID, -1)?;
-    syn(uif)?;
     Ok(())
 }
 
-fn cleanup_uinput(uif: &mut fs::File, slot_max: i32) {
-    let max_slot = slot_max.clamp(1, 50);
+/// Release every slot (fingers + triggers) and zero the tap buttons. Used only at
+/// startup and teardown, never while merging is live.
+fn force_release_all(uif: &mut fs::File, max_slot: i32) {
+    let max_slot = max_slot.clamp(1, 50);
     for slot in 0..=max_slot {
         let _ = emit(uif, EV_ABS, ABS_MT_SLOT, slot);
         let _ = emit(uif, EV_ABS, ABS_MT_TRACKING_ID, -1);
     }
-    let _ = emit(uif, EV_KEY, BTN_TOUCH, 0);
-    let _ = emit(uif, EV_KEY, BTN_TOOL_FINGER, 0);
+    let _ = set_tool_buttons(uif, 0);
     let _ = syn(uif);
-}
-
-fn force_release_all(uif: &mut fs::File, slot_max: i32) {
-    cleanup_uinput(uif, slot_max);
 }
 
 fn read_input_event(f: &mut fs::File) -> io::Result<InputEvent> {
@@ -517,11 +581,26 @@ struct Inner {
     right_x: AtomicI32,
     right_y: AtomicI32,
 
-    // bookkeeping
-    virt_active: AtomicI32,
+    // contact bookkeeping
+    virt_active: AtomicI32,  // live trigger contacts (0..=2)
+    finger_count: AtomicI32, // live forwarded finger contacts
     tid_l: AtomicU32,
     tid_r: AtomicU32,
     touch_major: i32,
+
+    // reserved trigger slots (above the finger slot range)
+    slot_l: i32,
+    slot_r: i32,
+
+    // raw fd of the grabbed real touchscreen, or -1 if not grabbed.
+    touch_grab_fd: AtomicI32,
+}
+
+impl Inner {
+    fn contact_count(&self) -> i32 {
+        self.finger_count.load(Ordering::SeqCst).max(0)
+            + self.virt_active.load(Ordering::SeqCst).max(0)
+    }
 }
 
 #[derive(Clone)]
@@ -533,7 +612,10 @@ pub struct TriggerManager {
 }
 
 impl TriggerManager {
-    /// Try to initialize triggers subsystem. If devices are not found, returns error.
+    /// Try to initialize the triggers subsystem. If the trigger devices are not
+    /// found, returns an error. If the touchscreen can't be found/grabbed, merge
+    /// is skipped and triggers stay disabled (we never use the broken two-device
+    /// fallback).
     pub fn init() -> io::Result<Self> {
         let devs = scan_input_devices()?;
         let (left, right, touch) = choose_devices(&devs)?;
@@ -541,9 +623,9 @@ impl TriggerManager {
         println!("TRIG: left={} name='{}'", left.devnode.display(), left.name);
         println!("TRIG: right={} name='{}'", right.devnode.display(), right.name);
         if let Some(t) = &touch {
-            println!("TRIG: touch={} name='{}' (ranges source)", t.devnode.display(), t.name);
+            println!("TRIG: touch={} name='{}' (grab+merge source)", t.devnode.display(), t.name);
         } else {
-            println!("TRIG: touch not detected (ranges fallback)");
+            println!("TRIG: touch device NOT found -- merge impossible, triggers disabled");
         }
 
         let (screen_w, screen_h) = discover_screen_size();
@@ -555,10 +637,15 @@ impl TriggerManager {
             ranges.x_min, ranges.x_max, ranges.y_min, ranges.y_max, ranges.slot_max, ranges.touch_major_max
         );
 
+        let slot_l = ranges.slot_max + 1;
+        let slot_r = ranges.slot_max + 2;
+        let cleanup_max = ranges.slot_max + 2;
+        println!("TRIG: finger slots 0..={} | trigger slots L={} R={}", ranges.slot_max, slot_l, slot_r);
+
         let uif = open_uinput()?;
         let mut uif = make_uinput_touch(uif, &ranges)?;
-        // startup cleanup
-        force_release_all(&mut uif, ranges.slot_max);
+        // startup cleanup (nothing is live yet, so releasing all slots is safe)
+        force_release_all(&mut uif, cleanup_max);
 
         let uif_arc = Arc::new(Mutex::new(uif));
 
@@ -574,14 +661,29 @@ impl TriggerManager {
             right_x: AtomicI32::new(ranges.x_min),
             right_y: AtomicI32::new(ranges.y_min),
             virt_active: AtomicI32::new(0),
-            tid_l: AtomicU32::new(1000),
-            tid_r: AtomicU32::new(2000),
+            finger_count: AtomicI32::new(0),
+            tid_l: AtomicU32::new(30000),
+            tid_r: AtomicU32::new(40000),
             touch_major: (ranges.touch_major_max / 16).clamp(5, ranges.touch_major_max.max(5)),
+            slot_l,
+            slot_r,
+            touch_grab_fd: AtomicI32::new(-1),
         });
 
-        // Spawn listener threads.
-        spawn_trigger_thread(inner.clone(), left.devnode, KEY_F7, 0);
-        spawn_trigger_thread(inner.clone(), right.devnode, KEY_F8, 1);
+        // Forwarder: grab the real touchscreen and merge its finger frames into the
+        // virtual device. Without it, merging is impossible -> keep triggers off.
+        match &touch {
+            Some(t) => {
+                spawn_forwarder(inner.clone(), t.devnode.clone(), ranges.slot_max);
+                // Give the forwarder a moment to grab before listeners go live.
+                thread::sleep(Duration::from_millis(150));
+                spawn_trigger_thread(inner.clone(), left.devnode, KEY_F7, true, slot_l);
+                spawn_trigger_thread(inner.clone(), right.devnode, KEY_F8, false, slot_r);
+            }
+            None => {
+                eprintln!("TRIG: no touchscreen to grab; trigger listeners NOT started");
+            }
+        }
 
         Ok(Self {
             inner,
@@ -591,11 +693,19 @@ impl TriggerManager {
         })
     }
 
-    /// Apply new trigger config. This will take effect quickly (< 250ms).
+    /// Apply new trigger config. Takes effect quickly (< 250ms).
     pub fn set_config(&self, cfg: ActiveConfig) {
         let any_side = cfg.enabled && (cfg.left.enabled || cfg.right.enabled);
 
         if !any_side {
+            self.disable();
+            return;
+        }
+
+        // If we never grabbed the touchscreen, refuse to inject (would recreate the
+        // broken two-device situation).
+        if self.inner.touch_grab_fd.load(Ordering::SeqCst) < 0 {
+            eprintln!("TRIG: set_config ignored -- touchscreen not grabbed (merge unavailable)");
             self.disable();
             return;
         }
@@ -621,18 +731,22 @@ impl TriggerManager {
         self.bump_gen();
     }
 
-    /// Disable triggers and force-release any active virtual touches.
+    /// Disable triggers and release ONLY the trigger slots (never the finger slots,
+    /// which the forwarder owns).
     pub fn disable(&self) {
         self.inner.active.store(false, Ordering::SeqCst);
         self.inner.left_enabled.store(false, Ordering::SeqCst);
         self.inner.right_enabled.store(false, Ordering::SeqCst);
 
-        // Force release now (don’t wait for hardware events).
         {
             let mut uif = self.inner.uif.lock().unwrap();
-            force_release_all(&mut uif, self.ranges.slot_max);
+            let _ = mt_contact_up(&mut uif, self.inner.slot_l);
+            let _ = mt_contact_up(&mut uif, self.inner.slot_r);
+            self.inner.virt_active.store(0, Ordering::SeqCst);
+            let count = self.inner.contact_count();
+            let _ = set_tool_buttons(&mut uif, count);
+            let _ = syn(&mut uif);
         }
-        self.inner.virt_active.store(0, Ordering::SeqCst);
         self.bump_gen();
     }
 
@@ -644,16 +758,152 @@ impl TriggerManager {
 impl Drop for TriggerManager {
     fn drop(&mut self) {
         self.inner.stop.store(true, Ordering::SeqCst);
-        // best-effort cleanup
+
+        // Restore native touch FIRST: ungrab the real touchscreen so the user keeps
+        // working touch even if the forwarder thread is still blocked in read().
+        let gfd = self.inner.touch_grab_fd.load(Ordering::SeqCst);
+        if gfd >= 0 {
+            let _ = xioctl(gfd, EVIOCGRAB, 0);
+            self.inner.touch_grab_fd.store(-1, Ordering::SeqCst);
+        }
+
+        // Best-effort uinput teardown.
         {
             let mut uif = self.inner.uif.lock().unwrap();
-            force_release_all(&mut uif, self.ranges.slot_max);
+            force_release_all(&mut uif, self.ranges.slot_max + 2);
             let _ = unsafe { libc::ioctl(uif.as_raw_fd(), UI_DEV_DESTROY as c_int) };
         }
     }
 }
 
-fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slot: i32) {
+/// Grab the real touchscreen and re-emit every finger frame into the merged
+/// virtual device, tracking the live finger count so tap buttons stay correct.
+fn spawn_forwarder(inner: Arc<Inner>, touch_path: PathBuf, finger_slot_max: i32) {
+    thread::spawn(move || {
+        let mut f = match open_event_dev(&touch_path) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("TRIG: forwarder open {} failed: {}", touch_path.display(), e);
+                return;
+            }
+        };
+        let fd = f.as_raw_fd();
+        if let Err(e) = xioctl(fd, EVIOCGRAB, 1) {
+            eprintln!(
+                "TRIG: EVIOCGRAB failed on {}: {} -- merge disabled, leaving native touch intact",
+                touch_path.display(),
+                e
+            );
+            return;
+        }
+        inner.touch_grab_fd.store(fd, Ordering::SeqCst);
+        println!("TRIG: forwarder grabbed {} (merge active)", touch_path.display());
+
+        let slots = (finger_slot_max.max(1) as usize) + 4;
+        let mut finger_tid: Vec<i32> = vec![-1; slots];
+        let mut cur_slot: usize = 0;
+        // Buffered (type, code, value) of the current frame, minus BTN_* and SYN.
+        let mut frame: Vec<(u16, u16, i32)> = Vec::with_capacity(64);
+
+        loop {
+            if inner.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let ev = match read_input_event(&mut f) {
+                Ok(e) => e,
+                Err(e) => {
+                    if inner.stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    eprintln!("TRIG: forwarder read error: {}", e);
+                    break;
+                }
+            };
+
+            // Track current slot (sticky across frames, per MT-B protocol).
+            if ev.type_ == EV_ABS && ev.code == ABS_MT_SLOT {
+                let s = ev.value.max(0) as usize;
+                cur_slot = s.min(finger_tid.len() - 1);
+            }
+            // Track finger contacts via tracking-id transitions.
+            if ev.type_ == EV_ABS && ev.code == ABS_MT_TRACKING_ID {
+                let prev = finger_tid[cur_slot];
+                if ev.value >= 0 && prev < 0 {
+                    inner.finger_count.fetch_add(1, Ordering::SeqCst);
+                    finger_tid[cur_slot] = ev.value;
+                } else if ev.value < 0 && prev >= 0 {
+                    let before = inner.finger_count.fetch_sub(1, Ordering::SeqCst);
+                    if before <= 1 {
+                        inner.finger_count.store(0, Ordering::SeqCst);
+                    }
+                    finger_tid[cur_slot] = -1;
+                } else if ev.value >= 0 {
+                    finger_tid[cur_slot] = ev.value;
+                }
+            }
+
+            if ev.type_ == EV_SYN && ev.code == SYN_REPORT {
+                // Flush the frame atomically so trigger writes never interleave
+                // inside a finger report.
+                let mut uif = inner.uif.lock().unwrap();
+                for &(ty, code, value) in &frame {
+                    let _ = emit(&mut uif, ty, code, value);
+                }
+                let count = inner.contact_count();
+                let _ = set_tool_buttons(&mut uif, count);
+                let _ = syn(&mut uif);
+                drop(uif);
+                frame.clear();
+                continue;
+            }
+
+            // Strip device-global tap buttons (managed centrally). Forward all other
+            // events (axes, non-REPORT SYN such as SYN_MT_REPORT) verbatim.
+            let is_btn = ev.type_ == EV_KEY
+                && matches!(
+                    ev.code,
+                    BTN_TOUCH
+                        | BTN_TOOL_FINGER
+                        | BTN_TOOL_DOUBLETAP
+                        | BTN_TOOL_TRIPLETAP
+                        | BTN_TOOL_QUADTAP
+                        | BTN_TOOL_QUINTTAP
+                );
+            if !is_btn {
+                frame.push((ev.type_, ev.code, ev.value));
+            }
+        }
+
+        // Restore native touch on exit.
+        let _ = xioctl(f.as_raw_fd(), EVIOCGRAB, 0);
+        inner.touch_grab_fd.store(-1, Ordering::SeqCst);
+        println!("TRIG: forwarder exit, ungrabbed {}", touch_path.display());
+    });
+}
+
+fn trigger_press(inner: &Inner, slot: i32, tid: i32, x: i32, y: i32) {
+    let mut uif = inner.uif.lock().unwrap();
+    if mt_contact_down(&mut uif, slot, tid, x, y, inner.touch_major).is_ok() {
+        inner.virt_active.fetch_add(1, Ordering::SeqCst);
+        let count = inner.contact_count();
+        let _ = set_tool_buttons(&mut uif, count);
+        let _ = syn(&mut uif);
+    }
+}
+
+fn trigger_release(inner: &Inner, slot: i32) {
+    let mut uif = inner.uif.lock().unwrap();
+    let _ = mt_contact_up(&mut uif, slot);
+    let before = inner.virt_active.fetch_sub(1, Ordering::SeqCst);
+    if before <= 1 {
+        inner.virt_active.store(0, Ordering::SeqCst);
+    }
+    let count = inner.contact_count();
+    let _ = set_tool_buttons(&mut uif, count);
+    let _ = syn(&mut uif);
+}
+
+fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, is_left: bool, slot: i32) {
     thread::spawn(move || {
         let mut f = match open_event_dev(&dev_path) {
             Ok(x) => x,
@@ -662,7 +912,8 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
                 return;
             }
         };
-        println!("TRIG: listen {} (slot={})", dev_path.display(), slot);
+        let side = if is_left { "L" } else { "R" };
+        println!("TRIG: listen {} (side={} slot={})", dev_path.display(), side, slot);
 
         let mut pressed = false;
         let mut abs0_seen = false;
@@ -690,10 +941,8 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
             let cur_gen = inner.gen.load(Ordering::SeqCst);
             if cur_gen != last_gen {
                 if pressed {
-                    let mut uif = inner.uif.lock().unwrap();
-                    let _ = touch_up(&mut uif, slot);
-                    dec_active(&inner);
-                    println!("TRIG: {} UP(reconfig)", if slot == 0 { "L" } else { "R" });
+                    trigger_release(&inner, slot);
+                    println!("TRIG: {} UP(reconfig)", side);
                     pressed = false;
                 }
                 abs_state = None;
@@ -704,7 +953,7 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
             }
 
             let active = inner.active.load(Ordering::SeqCst);
-            let side_enabled = if slot == 0 {
+            let side_enabled = if is_left {
                 inner.left_enabled.load(Ordering::SeqCst)
             } else {
                 inner.right_enabled.load(Ordering::SeqCst)
@@ -743,42 +992,37 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
                 pressed = true;
                 abs0_seen = false;
                 keyup_seen = false;
-                if abs_state.is_none() { abs_state = Some(true); }
-                if key_state.is_none() { key_state = Some(true); }
+                if abs_state.is_none() {
+                    abs_state = Some(true);
+                }
+                if key_state.is_none() {
+                    key_state = Some(true);
+                }
 
-                let (x, y) = if slot == 0 {
+                let (x, y) = if is_left {
                     (inner.left_x.load(Ordering::SeqCst), inner.left_y.load(Ordering::SeqCst))
                 } else {
                     (inner.right_x.load(Ordering::SeqCst), inner.right_y.load(Ordering::SeqCst))
                 };
 
-                let tid = if slot == 0 {
+                let tid = if is_left {
                     inner.tid_l.fetch_add(1, Ordering::SeqCst)
                 } else {
                     inner.tid_r.fetch_add(1, Ordering::SeqCst)
                 } as i32;
                 let tid = (tid % 65000).max(1);
 
-                inc_active(&inner);
-                {
-                    let mut uif = inner.uif.lock().unwrap();
-                    match touch_down(&mut uif, slot, tid, x, y, inner.touch_major) {
-                        Ok(_) => println!("TRIG: {} DOWN tid={} raw=({}, {})", if slot == 0 { "L" } else { "R" }, tid, x, y),
-                        Err(e) => eprintln!("TRIG: touch_down failed: {}", e),
-                    }
-                }
+                trigger_press(&inner, slot, tid, x, y);
+                println!("TRIG: {} DOWN tid={} raw=({}, {})", side, tid, x, y);
                 continue;
             }
 
             if pressed && is_release_evt {
-                let do_release = abs0_seen && keyup_seen && abs_state == Some(false) && key_state == Some(false);
+                let do_release =
+                    abs0_seen && keyup_seen && abs_state == Some(false) && key_state == Some(false);
                 if do_release {
-                    {
-                        let mut uif = inner.uif.lock().unwrap();
-                        let _ = touch_up(&mut uif, slot);
-                    }
-                    dec_active(&inner);
-                    println!("TRIG: {} UP", if slot == 0 { "L" } else { "R" });
+                    trigger_release(&inner, slot);
+                    println!("TRIG: {} UP", side);
                     pressed = false;
                     abs_state = None;
                     key_state = None;
@@ -789,33 +1033,7 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, slo
         }
 
         if pressed {
-            let mut uif = inner.uif.lock().unwrap();
-            let _ = touch_up(&mut uif, slot);
-            dec_active(&inner);
+            trigger_release(&inner, slot);
         }
     });
-}
-
-fn inc_active(inner: &Inner) {
-    inner.virt_active.fetch_add(1, Ordering::SeqCst);
-}
-
-fn dec_active(inner: &Inner) {
-    let mut cur = inner.virt_active.load(Ordering::SeqCst);
-    loop {
-        if cur <= 0 {
-            break;
-        }
-        match inner.virt_active.compare_exchange(cur, cur - 1, Ordering::SeqCst, Ordering::SeqCst)
-        {
-            Ok(_) => break,
-            Err(v) => cur = v,
-        }
-    }
-    if inner.virt_active.load(Ordering::SeqCst) == 0 {
-        let mut uif = inner.uif.lock().unwrap();
-        let _ = emit(&mut uif, EV_KEY, BTN_TOUCH, 0);
-        let _ = emit(&mut uif, EV_KEY, BTN_TOOL_FINGER, 0);
-        let _ = syn(&mut uif);
-    }
 }
