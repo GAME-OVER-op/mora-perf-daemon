@@ -339,6 +339,8 @@ let mut s = shared.write().unwrap();
     // Per-game thermal limit bypass flag.
     let mut game_disable_thermal_limit: bool = false;
     let mut last_triggers_cfg: Option<crate::triggers::ActiveConfig> = None;
+    let mut triggers_sys_enabled = false;
+    let mut trigger_preview_active = false;
     let mut last_game_check = Instant::now();
     let game_check_every = Duration::from_secs(GAME_CHECK_EVERY);
     let mut last_game_pkg: Option<String> = None;
@@ -420,13 +422,51 @@ let mut s = shared.write().unwrap();
             if let Some(mgr) = triggers.as_ref() {
                 if last_triggers_cfg.is_some() {
                     mgr.disable();
-                    crate::nubia_parts::set_system_triggers_enabled(false);
                     last_triggers_cfg = None;
+                }
+                if triggers_sys_enabled {
+                    crate::nubia_parts::set_system_triggers_enabled(false);
+                    triggers_sys_enabled = false;
+                }
+                trigger_preview_active = false;
+                let mut s = shared.write().unwrap();
+                s.info.triggers_active = false;
+                s.info.triggers_left = false;
+                s.info.triggers_right = false;
+                s.info.triggers_left_pressed = false;
+                s.info.triggers_right_pressed = false;
+                s.info.triggers_preview = false;
+                s.info.triggers_pkg = None;
+            }
+        }
+
+        if screen_on {
+            if let Some(mgr) = triggers.as_ref() {
+                let (preview_cfg, preview_pkg) = {
+                    let s = shared.read().unwrap();
+                    (s.trigger_preview.clone(), s.trigger_preview_package.clone())
+                };
+                let preview_cfg = preview_cfg.filter(|c| c.enabled && (c.left.enabled || c.right.enabled));
+                trigger_preview_active = preview_cfg.is_some();
+                if trigger_preview_active {
+                    if last_triggers_cfg.is_some() {
+                        mgr.disable();
+                        last_triggers_cfg = None;
+                    }
+                    if !triggers_sys_enabled {
+                        crate::nubia_parts::set_system_triggers_enabled(true);
+                        triggers_sys_enabled = true;
+                    }
+                    let cfg = preview_cfg.unwrap();
+                    let (left_pressed, right_pressed) = mgr.live_pressed();
                     let mut s = shared.write().unwrap();
-                    s.info.triggers_active = false;
-                    s.info.triggers_left = false;
-                    s.info.triggers_right = false;
-                    s.info.triggers_pkg = None;
+                    s.info.triggers_active = true;
+                    s.info.triggers_left = cfg.left.enabled;
+                    s.info.triggers_right = cfg.right.enabled;
+                    s.info.triggers_left_pressed = cfg.left.enabled && left_pressed;
+                    s.info.triggers_right_pressed = cfg.right.enabled && right_pressed;
+                    s.info.triggers_preview = true;
+                    s.info.triggers_pkg = preview_pkg;
                 }
             }
         }
@@ -465,54 +505,66 @@ let mut s = shared.write().unwrap();
 
             // Triggers config (per-game). Active only for foreground game and screen ON.
             if let Some(mgr) = triggers.as_ref() {
-                let desired_trig: Option<crate::triggers::ActiveConfig> = pkg
-                    .as_deref()
-                    .and_then(|p| {
-                        let s = shared.read().unwrap();
-                        if s.games.is_game(p) {
-                            s.games.triggers_for(p)
-                        } else {
-                            None
-                        }
-                    })
-                    .map(|t| crate::triggers::ActiveConfig {
-                        enabled: t.enabled,
-                        left: crate::triggers::SideConfig {
-                            enabled: t.left.enabled,
-                            x_px: t.left.x,
-                            y_px: t.left.y,
-                        },
-                        right: crate::triggers::SideConfig {
-                            enabled: t.right.enabled,
-                            x_px: t.right.x,
-                            y_px: t.right.y,
-                        },
-                    })
-                    .filter(|c| c.enabled && (c.left.enabled || c.right.enabled));
+                if !trigger_preview_active {
+                    let desired_trig: Option<crate::triggers::ActiveConfig> = pkg
+                        .as_deref()
+                        .and_then(|p| {
+                            let s = shared.read().unwrap();
+                            if s.games.is_game(p) {
+                                s.games.triggers_for(p)
+                            } else {
+                                None
+                            }
+                        })
+                        .map(|t| crate::triggers::ActiveConfig {
+                            enabled: t.enabled,
+                            left: crate::triggers::SideConfig {
+                                enabled: t.left.enabled,
+                                x_px: t.left.x,
+                                y_px: t.left.y,
+                            },
+                            right: crate::triggers::SideConfig {
+                                enabled: t.right.enabled,
+                                x_px: t.right.x,
+                                y_px: t.right.y,
+                            },
+                        })
+                        .filter(|c| c.enabled && (c.left.enabled || c.right.enabled));
 
-                if desired_trig != last_triggers_cfg {
-                    match desired_trig {
-                        Some(cfg) => {
-                            crate::nubia_parts::set_system_triggers_enabled(true);
-                            mgr.set_config(cfg);
+                    if desired_trig != last_triggers_cfg {
+                        match desired_trig {
+                            Some(cfg) => {
+                                if !triggers_sys_enabled {
+                                    crate::nubia_parts::set_system_triggers_enabled(true);
+                                    triggers_sys_enabled = true;
+                                }
+                                mgr.set_config(cfg);
+                            }
+                            None => {
+                                mgr.disable();
+                                if triggers_sys_enabled {
+                                    crate::nubia_parts::set_system_triggers_enabled(false);
+                                    triggers_sys_enabled = false;
+                                }
+                            }
                         }
-                        None => {
-                            mgr.disable();
-                            crate::nubia_parts::set_system_triggers_enabled(false);
-                        }
+                        last_triggers_cfg = desired_trig;
                     }
-                    last_triggers_cfg = desired_trig;
-                }
 
-                let (active, l, r) = match last_triggers_cfg {
-                    Some(c) => (true, c.left.enabled, c.right.enabled),
-                    None => (false, false, false),
-                };
-                let mut s = shared.write().unwrap();
-                s.info.triggers_active = active;
-                s.info.triggers_left = l;
-                s.info.triggers_right = r;
-                s.info.triggers_pkg = if active { pkg.clone() } else { None };
+                    let (left_pressed, right_pressed) = mgr.live_pressed();
+                    let (active, l, r) = match last_triggers_cfg {
+                        Some(c) => (true, c.left.enabled, c.right.enabled),
+                        None => (false, false, false),
+                    };
+                    let mut s = shared.write().unwrap();
+                    s.info.triggers_active = active;
+                    s.info.triggers_left = l;
+                    s.info.triggers_right = r;
+                    s.info.triggers_left_pressed = l && left_pressed;
+                    s.info.triggers_right_pressed = r && right_pressed;
+                    s.info.triggers_preview = false;
+                    s.info.triggers_pkg = if active { pkg.clone() } else { None };
+                }
             }
 
             if pkg != last_game_pkg {

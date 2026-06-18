@@ -173,6 +173,12 @@ class MoraViewModel(
         }
     }
 
+    fun refreshStateOnly() {
+        viewModelScope.launch {
+            runCatching { _state.value = repository.state() }.onFailure { _message.value = it.message }
+        }
+    }
+
     fun setDaemonNotifications(enabled: Boolean) {
         viewModelScope.launch {
             runCatching {
@@ -259,6 +265,24 @@ class MoraViewModel(
             runCatching {
                 repository.setTriggers(packageName, triggers)
                 refreshAll()
+            }.onFailure { _message.value = it.message }
+        }
+    }
+
+    fun setTriggerPreview(packageName: String?, triggers: TriggersConfig) {
+        viewModelScope.launch {
+            runCatching {
+                repository.setTriggerPreview(packageName, triggers)
+                _state.value = repository.state()
+            }.onFailure { _message.value = it.message }
+        }
+    }
+
+    fun clearTriggerPreview() {
+        viewModelScope.launch {
+            runCatching {
+                repository.clearTriggerPreview()
+                _state.value = repository.state()
             }.onFailure { _message.value = it.message }
         }
     }

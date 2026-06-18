@@ -576,6 +576,8 @@ struct Inner {
     // per-side enable and mapped ABS coords
     left_enabled: AtomicBool,
     right_enabled: AtomicBool,
+    left_pressed: AtomicBool,
+    right_pressed: AtomicBool,
     left_x: AtomicI32,
     left_y: AtomicI32,
     right_x: AtomicI32,
@@ -656,6 +658,8 @@ impl TriggerManager {
             gen: AtomicU64::new(1),
             left_enabled: AtomicBool::new(false),
             right_enabled: AtomicBool::new(false),
+            left_pressed: AtomicBool::new(false),
+            right_pressed: AtomicBool::new(false),
             left_x: AtomicI32::new(ranges.x_min),
             left_y: AtomicI32::new(ranges.y_min),
             right_x: AtomicI32::new(ranges.x_min),
@@ -748,6 +752,13 @@ impl TriggerManager {
             let _ = syn(&mut uif);
         }
         self.bump_gen();
+    }
+
+    pub fn live_pressed(&self) -> (bool, bool) {
+        (
+            self.inner.left_pressed.load(Ordering::SeqCst),
+            self.inner.right_pressed.load(Ordering::SeqCst),
+        )
     }
 
     fn bump_gen(&self) {
@@ -957,6 +968,11 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, is_
 
             let cur_gen = inner.gen.load(Ordering::SeqCst);
             if cur_gen != last_gen {
+                if is_left {
+                    inner.left_pressed.store(false, Ordering::SeqCst);
+                } else {
+                    inner.right_pressed.store(false, Ordering::SeqCst);
+                }
                 if pressed {
                     trigger_release(&inner, slot);
                     println!("TRIG: {} UP(reconfig)", side);
@@ -1001,6 +1017,14 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, is_
                 }
             }
 
+            if is_press_evt {
+                if is_left {
+                    inner.left_pressed.store(true, Ordering::SeqCst);
+                } else {
+                    inner.right_pressed.store(true, Ordering::SeqCst);
+                }
+            }
+
             if !pressed && is_press_evt {
                 if !(active && side_enabled) {
                     continue;
@@ -1038,6 +1062,11 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, is_
                 let do_release =
                     abs0_seen && keyup_seen && abs_state == Some(false) && key_state == Some(false);
                 if do_release {
+                    if is_left {
+                        inner.left_pressed.store(false, Ordering::SeqCst);
+                    } else {
+                        inner.right_pressed.store(false, Ordering::SeqCst);
+                    }
                     trigger_release(&inner, slot);
                     println!("TRIG: {} UP", side);
                     pressed = false;
@@ -1049,6 +1078,11 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, is_
             }
         }
 
+        if is_left {
+            inner.left_pressed.store(false, Ordering::SeqCst);
+        } else {
+            inner.right_pressed.store(false, Ordering::SeqCst);
+        }
         if pressed {
             trigger_release(&inner, slot);
         }

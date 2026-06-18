@@ -86,6 +86,16 @@ class MoraRepository(
         root = { rootHttpClient.post("api/games/set_triggers", requireToken(), GameSetTriggersPayload(packageName, triggers)); Unit }
     )
 
+    suspend fun setTriggerPreview(packageName: String?, triggers: TriggersConfig) = tryLocalThenRoot(
+        local = { client().setTriggerPreview(TriggerPreviewPayload(packageName, triggers)) },
+        root = { rootHttpClient.post("api/triggers/preview", requireToken(), TriggerPreviewPayload(packageName, triggers)); Unit }
+    )
+
+    suspend fun clearTriggerPreview() = tryLocalThenRoot(
+        local = { client().clearTriggerPreview() },
+        root = { rootHttpClient.post("api/triggers/preview_clear", requireToken(), null); Unit }
+    )
+
     suspend fun setSplitCharge(packageName: String, splitCharge: SplitChargeConfig) = tryLocalThenRoot(
         local = { client().setGameSplitCharge(GameSetSplitChargePayload(packageName, splitCharge)) },
         root = { rootHttpClient.post("api/games/set_split_charge", requireToken(), GameSetSplitChargePayload(packageName, splitCharge)); Unit }

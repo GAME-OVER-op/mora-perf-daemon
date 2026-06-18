@@ -26,11 +26,13 @@ import com.example.aw22xxxconfig.MoraViewModel
 import com.example.aw22xxxconfig.data.model.TriggerPoint
 import com.example.aw22xxxconfig.data.model.TriggersConfig
 import com.example.aw22xxxconfig.ui.components.MoraCard
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 @Composable
 fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -> Unit) {
     val games by viewModel.games.collectAsState()
+    val state by viewModel.state.collectAsState()
     val app = viewModel.appForPackage(packageName)
     val game = games.firstOrNull { it.packageName == packageName }
 
@@ -43,6 +45,26 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
         mutableFloatStateOf(game.splitCharge.stopBatteryPercent.toFloat())
     }
     var showTriggerEditor by remember { mutableStateOf(false) }
+    var editorLeft by remember(game.packageName) { mutableStateOf(Offset(180f, 520f)) }
+    var editorRight by remember(game.packageName) { mutableStateOf(Offset(936f, 520f)) }
+
+    LaunchedEffect(showTriggerEditor, packageName, editorLeft, editorRight) {
+        if (!showTriggerEditor) return@LaunchedEffect
+        val preview = TriggersConfig(
+            enabled = true,
+            left = TriggerPoint(enabled = true, x = editorLeft.x.roundToInt().coerceAtLeast(0), y = editorLeft.y.roundToInt().coerceAtLeast(0)),
+            right = TriggerPoint(enabled = true, x = editorRight.x.roundToInt().coerceAtLeast(0), y = editorRight.y.roundToInt().coerceAtLeast(0)),
+        )
+        viewModel.setTriggerPreview(packageName, preview)
+    }
+
+    LaunchedEffect(showTriggerEditor) {
+        if (!showTriggerEditor) return@LaunchedEffect
+        while (showTriggerEditor) {
+            viewModel.refreshStateOnly()
+            delay(140)
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -91,10 +113,7 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
                     onValueChangeFinished = {
                         val percent = splitChargePercent.roundToInt().coerceIn(0, 100)
                         if (percent != splitCharge.stopBatteryPercent) {
-                            viewModel.setGameSplitCharge(
-                                packageName,
-                                splitCharge.copy(stopBatteryPercent = percent)
-                            )
+                            viewModel.setGameSplitCharge(packageName, splitCharge.copy(stopBatteryPercent = percent))
                         }
                     },
                     valueRange = 0f..100f,
@@ -112,28 +131,48 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
             SettingRow("Enable trigger mode", triggers.enabled) {
                 viewModel.setGameTriggers(packageName, triggers.copy(enabled = it))
             }
-            FilledTonalButton(onClick = { showTriggerEditor = true }) { Text("Configure trigger points") }
-            TriggerSummary("Left trigger", triggers.left, onPick = { showTriggerEditor = true }) {
+            FilledTonalButton(onClick = {
+                editorLeft = Offset(triggers.left.x.ifZero(180).toFloat(), triggers.left.y.ifZero(520).toFloat())
+                editorRight = Offset(triggers.right.x.ifZero(936).toFloat(), triggers.right.y.ifZero(520).toFloat())
+                showTriggerEditor = true
+            }) { Text("Configure trigger points") }
+            TriggerSummary("Left trigger", triggers.left, onPick = {
+                editorLeft = Offset(triggers.left.x.ifZero(180).toFloat(), triggers.left.y.ifZero(520).toFloat())
+                editorRight = Offset(triggers.right.x.ifZero(936).toFloat(), triggers.right.y.ifZero(520).toFloat())
+                showTriggerEditor = true
+            }) {
                 viewModel.setGameTriggers(packageName, triggers.copy(left = TriggerPoint(enabled = false, x = triggers.left.x, y = triggers.left.y)))
             }
-            TriggerSummary("Right trigger", triggers.right, onPick = { showTriggerEditor = true }) {
+            TriggerSummary("Right trigger", triggers.right, onPick = {
+                editorLeft = Offset(triggers.left.x.ifZero(180).toFloat(), triggers.left.y.ifZero(520).toFloat())
+                editorRight = Offset(triggers.right.x.ifZero(936).toFloat(), triggers.right.y.ifZero(520).toFloat())
+                showTriggerEditor = true
+            }) {
                 viewModel.setGameTriggers(packageName, triggers.copy(right = TriggerPoint(enabled = false, x = triggers.right.x, y = triggers.right.y)))
             }
         }
     }
 
     if (showTriggerEditor) {
-        val triggers = game.triggers ?: TriggersConfig(enabled = true)
         TriggerPickerFullscreen(
-            initialLeft = Offset(triggers.left.x.ifZero(180).toFloat(), triggers.left.y.ifZero(520).toFloat()),
-            initialRight = Offset(triggers.right.x.ifZero(936).toFloat(), triggers.right.y.ifZero(520).toFloat()),
-            onDismiss = { showTriggerEditor = false },
+            initialLeft = editorLeft,
+            initialRight = editorRight,
+            leftPressed = state.triggers.leftPressed,
+            rightPressed = state.triggers.rightPressed,
+            onLeftChanged = { editorLeft = it },
+            onRightChanged = { editorRight = it },
+            onDismiss = {
+                showTriggerEditor = false
+                viewModel.clearTriggerPreview()
+            },
             onSave = { left, right ->
+                val triggers = game.triggers ?: TriggersConfig(enabled = true)
                 val updated = triggers.copy(
                     enabled = true,
                     left = TriggerPoint(true, left.x.roundToInt().coerceAtLeast(0), left.y.roundToInt().coerceAtLeast(0)),
                     right = TriggerPoint(true, right.x.roundToInt().coerceAtLeast(0), right.y.roundToInt().coerceAtLeast(0)),
                 )
+                viewModel.clearTriggerPreview()
                 viewModel.setGameTriggers(packageName, updated)
                 showTriggerEditor = false
             }
@@ -167,12 +206,19 @@ private fun TriggerSummary(title: String, point: TriggerPoint, onPick: () -> Uni
 private fun TriggerPickerFullscreen(
     initialLeft: Offset,
     initialRight: Offset,
+    leftPressed: Boolean,
+    rightPressed: Boolean,
+    onLeftChanged: (Offset) -> Unit,
+    onRightChanged: (Offset) -> Unit,
     onDismiss: () -> Unit,
     onSave: (Offset, Offset) -> Unit,
 ) {
     var left by remember(initialLeft) { mutableStateOf(initialLeft) }
     var right by remember(initialRight) { mutableStateOf(initialRight) }
     var dragTarget by remember { mutableStateOf<TriggerHandle?>(null) }
+
+    LaunchedEffect(left) { onLeftChanged(left) }
+    LaunchedEffect(right) { onRightChanged(right) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -188,9 +234,7 @@ private fun TriggerPickerFullscreen(
                         p.y.coerceIn(0f, size.height.toFloat().coerceAtLeast(1f)),
                     )
                     detectDragGestures(
-                        onDragStart = { pos ->
-                            dragTarget = pickTriggerHandle(pos, left, right)
-                        },
+                        onDragStart = { pos -> dragTarget = pickTriggerHandle(pos, left, right) },
                         onDragEnd = { dragTarget = null },
                         onDragCancel = { dragTarget = null },
                         onDrag = { change, dragAmount ->
@@ -207,14 +251,14 @@ private fun TriggerPickerFullscreen(
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val h = size.height
                 val w = size.width
-                val blue = Color(0xFF3A86FF)
-                val red = Color(0xFFFF3B5C)
-                drawRoundRect(blue.copy(alpha = 0.35f), topLeft = Offset(18f, h * 0.18f), size = Size(28f, h * 0.64f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18f, 18f))
-                drawRoundRect(red.copy(alpha = 0.35f), topLeft = Offset(w - 46f, h * 0.18f), size = Size(28f, h * 0.64f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18f, 18f))
-                drawLine(blue.copy(alpha = 0.55f), Offset(44f, left.y), Offset(left.x, left.y), strokeWidth = 8f, cap = StrokeCap.Round)
-                drawLine(red.copy(alpha = 0.55f), Offset(w - 44f, right.y), Offset(right.x, right.y), strokeWidth = 8f, cap = StrokeCap.Round)
-                drawTriggerPoint(left, blue)
-                drawTriggerPoint(right, red)
+                val blue = if (leftPressed) Color(0xFF86B7FF) else Color(0xFF3A86FF)
+                val red = if (rightPressed) Color(0xFFFF8BA0) else Color(0xFFFF3B5C)
+                drawRoundRect(blue.copy(alpha = if (leftPressed) 0.85f else 0.35f), topLeft = Offset(18f, h * 0.18f), size = Size(28f, h * 0.64f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18f, 18f))
+                drawRoundRect(red.copy(alpha = if (rightPressed) 0.85f else 0.35f), topLeft = Offset(w - 46f, h * 0.18f), size = Size(28f, h * 0.64f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18f, 18f))
+                drawLine(blue.copy(alpha = if (leftPressed) 1f else 0.55f), Offset(44f, left.y), Offset(left.x, left.y), strokeWidth = if (leftPressed) 14f else 8f, cap = StrokeCap.Round)
+                drawLine(red.copy(alpha = if (rightPressed) 1f else 0.55f), Offset(w - 44f, right.y), Offset(right.x, right.y), strokeWidth = if (rightPressed) 14f else 8f, cap = StrokeCap.Round)
+                drawTriggerPoint(left, blue, leftPressed)
+                drawTriggerPoint(right, red, rightPressed)
             }
 
             Column(
@@ -226,7 +270,16 @@ private fun TriggerPickerFullscreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text("Trigger coordinates", style = MaterialTheme.typography.titleMedium)
-                Text("Blue = left, red = right. Drag circles; cross center is the press point.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Press the shoulder trigger: matching bar and point will light up.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    when {
+                        leftPressed && rightPressed -> "Both triggers pressed"
+                        leftPressed -> "Left trigger pressed"
+                        rightPressed -> "Right trigger pressed"
+                        else -> "Waiting for trigger press"
+                    },
+                    color = if (leftPressed || rightPressed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             Row(
@@ -260,9 +313,9 @@ private fun distance(a: Offset, b: Offset): Float {
     return kotlin.math.sqrt(dx * dx + dy * dy)
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTriggerPoint(center: Offset, color: Color) {
-    drawCircle(color.copy(alpha = 0.95f), radius = 42f, center = center)
-    drawCircle(Color.Black.copy(alpha = 0.35f), radius = 42f, center = center, style = Stroke(width = 4f))
-    drawLine(Color.White, Offset(center.x - 20f, center.y), Offset(center.x + 20f, center.y), strokeWidth = 5f, cap = StrokeCap.Round)
-    drawLine(Color.White, Offset(center.x, center.y - 20f), Offset(center.x, center.y + 20f), strokeWidth = 5f, cap = StrokeCap.Round)
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTriggerPoint(center: Offset, color: Color, active: Boolean) {
+    drawCircle(color.copy(alpha = if (active) 1f else 0.95f), radius = if (active) 52f else 42f, center = center)
+    drawCircle(Color.Black.copy(alpha = 0.35f), radius = if (active) 52f else 42f, center = center, style = Stroke(width = if (active) 6f else 4f))
+    drawLine(Color.White, Offset(center.x - 20f, center.y), Offset(center.x + 20f, center.y), strokeWidth = if (active) 7f else 5f, cap = StrokeCap.Round)
+    drawLine(Color.White, Offset(center.x, center.y - 20f), Offset(center.x, center.y + 20f), strokeWidth = if (active) 7f else 5f, cap = StrokeCap.Round)
 }

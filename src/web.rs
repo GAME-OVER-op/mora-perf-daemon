@@ -382,9 +382,12 @@ fn build_state_json(shared: &Arc<RwLock<SharedState>>) -> Value {
         "game_mode": s.info.game_mode,
         "triggers": {
             "active": s.info.triggers_active,
+            "preview": s.info.triggers_preview,
             "package": s.info.triggers_pkg.clone(),
             "left": s.info.triggers_left,
-            "right": s.info.triggers_right
+            "right": s.info.triggers_right,
+            "left_pressed": s.info.triggers_left_pressed,
+            "right_pressed": s.info.triggers_right_pressed
         },
         "idle_mode": s.info.idle_mode,
         "daemon_notifications": s.config.daemon_notifications,
@@ -1245,6 +1248,13 @@ struct GameSetTriggersPayload {
 }
 
 #[derive(Deserialize)]
+struct TriggerPreviewPayload {
+    #[serde(default)]
+    package: Option<String>,
+    triggers: TriggersConfig,
+}
+
+#[derive(Deserialize)]
 struct GameSetSplitChargePayload {
     package: String,
     split_charge: SplitChargeConfig,
@@ -1458,6 +1468,42 @@ fn handle_api_games_set_triggers(
     games_watch::apply_and_persist(shared, games_path, file)
 }
 
+fn handle_api_triggers_preview(
+    shared: &Arc<RwLock<SharedState>>,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload: TriggerPreviewPayload =
+        serde_json::from_slice(body).map_err(|e| format!("bad json: {}", e))?;
+
+    if payload.triggers.enabled {
+        if payload.triggers.left.enabled && (payload.triggers.left.x < 0 || payload.triggers.left.y < 0) {
+            return Err("left trigger coordinates must be non-negative".to_string());
+        }
+        if payload.triggers.right.enabled && (payload.triggers.right.x < 0 || payload.triggers.right.y < 0) {
+            return Err("right trigger coordinates must be non-negative".to_string());
+        }
+    }
+
+    let preview = if payload.triggers.enabled && (payload.triggers.left.enabled || payload.triggers.right.enabled) {
+        Some(payload.triggers)
+    } else {
+        None
+    };
+    let mut s = shared.write().unwrap();
+    s.trigger_preview = preview;
+    s.trigger_preview_package = payload.package.filter(|v| !v.trim().is_empty());
+    Ok(())
+}
+
+fn handle_api_triggers_preview_clear(
+    shared: &Arc<RwLock<SharedState>>,
+) -> Result<(), String> {
+    let mut s = shared.write().unwrap();
+    s.trigger_preview = None;
+    s.trigger_preview_package = None;
+    Ok(())
+}
+
 fn handle_api_games_set_split_charge(
     shared: &Arc<RwLock<SharedState>>,
     games_path: &Path,
@@ -1649,6 +1695,14 @@ pub fn spawn(shared: Arc<RwLock<SharedState>>, _leds: Arc<crate::leds::Leds>, cf
                 },
 
                 (Method::Post, "/api/games/set_triggers") => match handle_api_games_set_triggers(&shared, &games_path, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+                (Method::Post, "/api/triggers/preview") => match handle_api_triggers_preview(&shared, &body) {
+                    Ok(_) => Response::from_string("ok"),
+                    Err(e) => bad(400, &e),
+                },
+                (Method::Post, "/api/triggers/preview_clear") => match handle_api_triggers_preview_clear(&shared) {
                     Ok(_) => Response::from_string("ok"),
                     Err(e) => bad(400, &e),
                 },
