@@ -10,3 +10,6 @@
 *.idsig
 *.profraw
 *.profdata
+
+# vendor_boot images
+magisk/vendor_boot/*.img
