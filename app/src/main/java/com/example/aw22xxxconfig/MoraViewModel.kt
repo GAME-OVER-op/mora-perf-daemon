@@ -9,9 +9,13 @@ import com.example.aw22xxxconfig.data.model.*
 import com.example.aw22xxxconfig.data.repo.MoraRepository
 import com.example.aw22xxxconfig.data.root.InstalledAppsProvider
 import com.example.aw22xxxconfig.data.root.RootShell
+import com.example.aw22xxxconfig.data.root.SystemMaintenance
 import com.example.aw22xxxconfig.data.root.TokenReader
+import com.example.aw22xxxconfig.data.root.VendorBootFlasher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +30,11 @@ data class AndroidFeatureState(
     val rawAmbientTouchToWake: String = "?",
     val rawWakeGestureEnabled: String = "?",
     val rawDozeTapGesture: String = "?",
+)
+
+data class MaintenanceState(
+    val running: Boolean = false,
+    val log: String = "",
 )
 
 class MoraViewModel(
@@ -54,6 +63,9 @@ class MoraViewModel(
 
     private val _androidFeatures = MutableStateFlow(AndroidFeatureState(loading = true))
     val androidFeatures: StateFlow<AndroidFeatureState> = _androidFeatures.asStateFlow()
+
+    private val _maintenance = MutableStateFlow(MaintenanceState())
+    val maintenance: StateFlow<MaintenanceState> = _maintenance.asStateFlow()
 
     private var refreshJob: Job? = null
 
@@ -269,6 +281,38 @@ class MoraViewModel(
         }
     }
 
+
+    fun checkSystemCleanup(includeKeyboard: Boolean) {
+        runMaintenance { SystemMaintenance.checkDebloatTargets(includeKeyboard).getOrThrow() }
+    }
+
+    fun runSystemCleanup(includeKeyboard: Boolean) {
+        runMaintenance { SystemMaintenance.runDebloat(includeKeyboard).getOrThrow() }
+    }
+
+    fun restoreSystemCleanup(includeKeyboard: Boolean) {
+        runMaintenance { SystemMaintenance.restoreDebloat(includeKeyboard).getOrThrow() }
+    }
+
+    fun flashVendorBoot() {
+        runMaintenance { VendorBootFlasher.flash().getOrThrow() }
+    }
+
+    fun isVendorBootSupportedDevice(): Boolean = VendorBootFlasher.isSupportedDevice()
+
+
+    private fun runMaintenance(block: suspend () -> String) {
+        viewModelScope.launch {
+            _maintenance.value = _maintenance.value.copy(running = true)
+            runCatching { withContext(Dispatchers.IO) { block() } }
+                .onSuccess { _maintenance.value = MaintenanceState(running = false, log = it) }
+                .onFailure {
+                    val text = it.message ?: it.toString()
+                    _maintenance.value = MaintenanceState(running = false, log = text)
+                    _message.value = text
+                }
+        }
+    }
     fun appForPackage(packageName: String): InstalledApp? = _installedApps.value.firstOrNull { it.packageName == packageName }
 
     companion object {

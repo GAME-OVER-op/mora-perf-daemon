@@ -13,6 +13,7 @@ mod leds;
 mod mem;
 mod notify;
 mod notifications;
+mod nubia_parts;
 mod power;
 mod procwatch;
 mod profiles;
@@ -206,6 +207,9 @@ let mut s = shared.write().unwrap();
             None
         }
     };
+    // Keep Nubia's system trigger switch off until Mora enters a game that has
+    // trigger coordinates enabled. This avoids leaving triggers enabled globally.
+    crate::nubia_parts::set_system_triggers_enabled(false);
 
     let gpu_busy_percent_path = {
         let p = PathBuf::from(GPU_BUSY_PERCENT);
@@ -416,6 +420,7 @@ let mut s = shared.write().unwrap();
             if let Some(mgr) = triggers.as_ref() {
                 if last_triggers_cfg.is_some() {
                     mgr.disable();
+                    crate::nubia_parts::set_system_triggers_enabled(false);
                     last_triggers_cfg = None;
                     let mut s = shared.write().unwrap();
                     s.info.triggers_active = false;
@@ -487,8 +492,14 @@ let mut s = shared.write().unwrap();
 
                 if desired_trig != last_triggers_cfg {
                     match desired_trig {
-                        Some(cfg) => mgr.set_config(cfg),
-                        None => mgr.disable(),
+                        Some(cfg) => {
+                            crate::nubia_parts::set_system_triggers_enabled(true);
+                            mgr.set_config(cfg);
+                        }
+                        None => {
+                            mgr.disable();
+                            crate::nubia_parts::set_system_triggers_enabled(false);
+                        }
                     }
                     last_triggers_cfg = desired_trig;
                 }

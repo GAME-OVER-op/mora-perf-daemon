@@ -151,18 +151,12 @@ impl UserConfig {
 }
 
 fn normalize_external_mode(m: ExternalLedMode) -> ExternalLedMode {
-    // Supported: steady/breathe/flashing
-    match m {
-        ExternalLedMode::Static | ExternalLedMode::Breath | ExternalLedMode::Blink => m,
-        _ => ExternalLedMode::Static,
-    }
+    // Keep every APK-discovered mode in config; leds.rs normalizes unsupported firmware modes at apply time.
+    m
 }
 
 fn normalize_fan_mode(m: FanLedMode) -> FanLedMode {
-    // Supported: flow/steady/flashing/breathe (+ off)
-    match m {
-        FanLedMode::Off | FanLedMode::Flow | FanLedMode::Breath | FanLedMode::Blink | FanLedMode::Static => m,
-    }
+    m
 }
 
 
@@ -272,10 +266,22 @@ pub enum ExternalLedMode {
     Breath,
     #[serde(rename = "flashing", alias = "blink")]
     Blink,
+    #[serde(rename = "double_flash", alias = "opposite_flash")]
+    DoubleFlash,
     #[serde(rename = "scintillation", alias = "sparkle")]
     Sparkle,
     #[serde(rename = "flow")]
     Flow,
+    #[serde(rename = "ripple")]
+    Ripple,
+    #[serde(rename = "echo")]
+    Echo,
+    #[serde(rename = "jump")]
+    Jump,
+    #[serde(rename = "burst_flash", alias = "burst")]
+    BurstFlash,
+    #[serde(rename = "cycle_flash")]
+    CycleFlash,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Copy, PartialEq, Eq)]
@@ -318,13 +324,17 @@ pub enum FanLedMode {
     Breath,
     #[serde(rename = "flashing", alias = "blink")]
     Blink,
+    #[serde(rename = "burst_flash", alias = "burst")]
+    BurstFlash,
     #[serde(rename = "steady", alias = "static")]
     Static,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Copy, PartialEq, Eq)]
 pub enum FanLedColor {
-    #[serde(rename = "rose", alias = "red")]
+    #[serde(rename = "red")]
+    Red,
+    #[serde(rename = "rose")]
     Rose,
     #[serde(rename = "yellow")]
     Yellow,
@@ -338,19 +348,19 @@ pub enum FanLedColor {
     Purple,
     #[serde(rename = "orange")]
     Orange,
-    #[serde(rename = "mixed_1")]
+    #[serde(rename = "mix_color1", alias = "mixed_1")]
     Mixed1,
-    #[serde(rename = "mixed_2")]
+    #[serde(rename = "mix_color2", alias = "mixed_2")]
     Mixed2,
-    #[serde(rename = "mixed_3")]
+    #[serde(rename = "mix_color3", alias = "mixed_3")]
     Mixed3,
-    #[serde(rename = "mixed_4")]
+    #[serde(rename = "mix_color4", alias = "mixed_4")]
     Mixed4,
-    #[serde(rename = "mixed_5")]
+    #[serde(rename = "mix_color5", alias = "mixed_5")]
     Mixed5,
-    #[serde(rename = "mixed_6")]
+    #[serde(rename = "mix_color6", alias = "mixed_6")]
     Mixed6,
-    #[serde(rename = "mixed_7", alias = "white")]
+    #[serde(rename = "mix_color7", alias = "mixed_7", alias = "white")]
     Mixed7,
 }
 
