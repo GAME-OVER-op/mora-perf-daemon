@@ -28,13 +28,13 @@ jobs:
 
           asset_url=$(printf '%s' "$release_json" | jq -r '
             .assets
-            | map(select(.name | test("vendor_boot.*\.img$|\.img$"; "i")))
+            | map(select((.name | ascii_downcase | endswith(".img")) and true))
             | .[0].browser_download_url // empty
           ')
 
           asset_name=$(printf '%s' "$release_json" | jq -r '
             .assets
-            | map(select(.name | test("vendor_boot.*\.img$|\.img$"; "i")))
+            | map(select((.name | ascii_downcase | endswith(".img")) and true))
             | .[0].name // empty
           ')
 
