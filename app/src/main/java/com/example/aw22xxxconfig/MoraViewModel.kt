@@ -298,6 +298,14 @@ class MoraViewModel(
         runMaintenance { VendorBootFlasher.flash().getOrThrow() }
     }
 
+    fun grantOverlayPermission() {
+        runMaintenance { SystemMaintenance.grantOverlayPermission(appContext.packageName).getOrThrow() }
+    }
+
+    fun checkOverlayPermission() {
+        runMaintenance { SystemMaintenance.checkOverlayPermission(appContext.packageName).getOrThrow() }
+    }
+
     fun isVendorBootSupportedDevice(): Boolean = VendorBootFlasher.isSupportedDevice()
 
 

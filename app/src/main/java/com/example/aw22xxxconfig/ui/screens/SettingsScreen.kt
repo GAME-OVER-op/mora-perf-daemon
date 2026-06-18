@@ -6,13 +6,13 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.provider.Settings
 import android.os.StatFs
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -74,10 +74,7 @@ fun SettingsScreen(viewModel: MoraViewModel) {
                         )
                     }
                 }
-                Switch(
-                    checked = config.usePhoneCooler,
-                    onCheckedChange = viewModel::setUsePhoneCooler
-                )
+                Switch(checked = config.usePhoneCooler, onCheckedChange = viewModel::setUsePhoneCooler)
             }
             Spacer(modifier = Modifier.height(12.dp))
             Button(onClick = { viewModel.refresh(); viewModel.refreshAndroidFeatures() }) { Text("Refresh now") }
@@ -90,23 +87,24 @@ fun SettingsScreen(viewModel: MoraViewModel) {
                 if (androidFeatures.loading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                 } else {
-                    Switch(
-                        checked = androidFeatures.doubleTapToWakeEnabled,
-                        onCheckedChange = viewModel::setDoubleTapToWakeEnabled
-                    )
+                    Switch(checked = androidFeatures.doubleTapToWakeEnabled, onCheckedChange = viewModel::setDoubleTapToWakeEnabled)
                 }
             }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Display over other apps")
-                    Text("Needed for future trigger overlays above games.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Display over other apps")
+                Text(
+                    "Mora is installed as a privileged app, so some ROMs do not show it in the normal overlay list. You can grant overlay directly with root.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(enabled = !maintenance.running, onClick = { viewModel.grantOverlayPermission() }) { Text("Grant via root") }
+                    Button(enabled = !maintenance.running, onClick = { viewModel.checkOverlayPermission() }) { Text("Check") }
+                    Button(onClick = {
+                        context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+                    }) { Text("Open settings") }
                 }
-                Button(onClick = {
-                    context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
-                }) { Text("Open") }
             }
         }
-
         MoraCard("System cleanup") {
             Text(
                 "Uses the fixed package list from android_debloat_root_v21.sh. Packages are disabled for user 0, not physically deleted.",
@@ -125,12 +123,8 @@ fun SettingsScreen(viewModel: MoraViewModel) {
                 Button(enabled = !maintenance.running, onClick = { viewModel.restoreSystemCleanup(includeKeyboard) }) { Text("Restore") }
             }
         }
-
         MoraCard("Overclocked vendor_boot") {
-            Text(
-                "Image path: ${BuildConstants.VENDOR_BOOT_IMAGE_PATH}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text("Image path: ${BuildConstants.VENDOR_BOOT_IMAGE_PATH}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (vendorBootSupported) {
                 Text("Supported device detected: Red Magic 9 Pro / NX769J")
             } else {
@@ -145,7 +139,6 @@ fun SettingsScreen(viewModel: MoraViewModel) {
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
             ) { Text("Flash vendor_boot") }
         }
-
         if (maintenance.running) {
             MoraCard("Maintenance") {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -158,10 +151,7 @@ fun SettingsScreen(viewModel: MoraViewModel) {
             MoraCard("Last maintenance log") {
                 Text(
                     maintenance.log.takeLast(6000),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF090B10), RoundedCornerShape(12.dp))
-                        .padding(12.dp),
+                    modifier = Modifier.fillMaxWidth().background(Color(0xFF090B10), RoundedCornerShape(12.dp)).padding(12.dp),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

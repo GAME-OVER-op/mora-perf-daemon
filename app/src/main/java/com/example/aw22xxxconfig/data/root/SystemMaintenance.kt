@@ -107,6 +107,19 @@ object SystemMaintenance {
         buildPackageLoopCommand(includeKeyboard, restore = true, checkOnly = false)
     )
 
+    fun grantOverlayPermission(packageName: String): Result<String> = RootShell.exec(
+        """
+        PKG="$packageName"
+        appops set "$packageName" SYSTEM_ALERT_WINDOW allow >/dev/null 2>&1 || true
+        cmd appops set "$packageName" SYSTEM_ALERT_WINDOW allow >/dev/null 2>&1 || true
+        appops get "$packageName" SYSTEM_ALERT_WINDOW 2>/dev/null || cmd appops get "$packageName" SYSTEM_ALERT_WINDOW 2>/dev/null || true
+        """.trimIndent()
+    )
+
+    fun checkOverlayPermission(packageName: String): Result<String> = RootShell.exec(
+        "appops get "$packageName" SYSTEM_ALERT_WINDOW 2>/dev/null || cmd appops get "$packageName" SYSTEM_ALERT_WINDOW 2>/dev/null || true"
+    )
+
     private fun buildPackageLoopCommand(includeKeyboard: Boolean, restore: Boolean, checkOnly: Boolean): String {
         val packages = if (includeKeyboard) debloatPackages + keyboardPackage else debloatPackages
         val body = packages.joinToString("\n")
