@@ -117,7 +117,7 @@ object SystemMaintenance {
     )
 
     fun checkOverlayPermission(packageName: String): Result<String> = RootShell.exec(
-        "appops get "$packageName" SYSTEM_ALERT_WINDOW 2>/dev/null || cmd appops get "$packageName" SYSTEM_ALERT_WINDOW 2>/dev/null || true"
+        "appops get \"$packageName\" SYSTEM_ALERT_WINDOW 2>/dev/null || cmd appops get \"$packageName\" SYSTEM_ALERT_WINDOW 2>/dev/null || true"
     )
 
     private fun buildPackageLoopCommand(includeKeyboard: Boolean, restore: Boolean, checkOnly: Boolean): String {
