@@ -6,7 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.os.Settings
+import android.provider.Settings
 import android.os.StatFs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
