@@ -1058,15 +1058,18 @@ fn spawn_trigger_thread(inner: Arc<Inner>, dev_path: PathBuf, key_code: u16, is_
                 continue;
             }
 
+            if is_release_evt {
+                if is_left {
+                    inner.left_pressed.store(false, Ordering::SeqCst);
+                } else {
+                    inner.right_pressed.store(false, Ordering::SeqCst);
+                }
+            }
+
             if pressed && is_release_evt {
                 let do_release =
                     abs0_seen && keyup_seen && abs_state == Some(false) && key_state == Some(false);
                 if do_release {
-                    if is_left {
-                        inner.left_pressed.store(false, Ordering::SeqCst);
-                    } else {
-                        inner.right_pressed.store(false, Ordering::SeqCst);
-                    }
                     trigger_release(&inner, slot);
                     println!("TRIG: {} UP", side);
                     pressed = false;
