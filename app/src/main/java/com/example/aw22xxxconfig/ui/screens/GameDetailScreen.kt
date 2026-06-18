@@ -26,7 +26,6 @@ import com.example.aw22xxxconfig.MoraViewModel
 import com.example.aw22xxxconfig.data.model.TriggerPoint
 import com.example.aw22xxxconfig.data.model.TriggersConfig
 import com.example.aw22xxxconfig.ui.components.MoraCard
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
@@ -173,8 +172,7 @@ private fun TriggerPickerFullscreen(
 ) {
     var left by remember(initialLeft) { mutableStateOf(initialLeft) }
     var right by remember(initialRight) { mutableStateOf(initialRight) }
-    var draggingLeft by remember { mutableStateOf(false) }
-    var draggingRight by remember { mutableStateOf(false) }
+    var dragTarget by remember { mutableStateOf<TriggerHandle?>(null) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -184,22 +182,24 @@ private fun TriggerPickerFullscreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xF0050506))
-                .pointerInput(left, right) {
+                .pointerInput(Unit) {
                     fun clampPoint(p: Offset): Offset = Offset(
                         p.x.coerceIn(0f, size.width.toFloat().coerceAtLeast(1f)),
                         p.y.coerceIn(0f, size.height.toFloat().coerceAtLeast(1f)),
                     )
                     detectDragGestures(
                         onDragStart = { pos ->
-                            draggingLeft = distance(pos, left) <= 96f || pos.x < size.width / 2f
-                            draggingRight = !draggingLeft
+                            dragTarget = pickTriggerHandle(pos, left, right)
                         },
-                        onDragEnd = { draggingLeft = false; draggingRight = false },
-                        onDragCancel = { draggingLeft = false; draggingRight = false },
+                        onDragEnd = { dragTarget = null },
+                        onDragCancel = { dragTarget = null },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            if (draggingLeft) left = clampPoint(left + dragAmount)
-                            if (draggingRight) right = clampPoint(right + dragAmount)
+                            when (dragTarget) {
+                                TriggerHandle.LEFT -> left = clampPoint(left + dragAmount)
+                                TriggerHandle.RIGHT -> right = clampPoint(right + dragAmount)
+                                null -> Unit
+                            }
                         }
                     )
                 }
@@ -240,7 +240,25 @@ private fun TriggerPickerFullscreen(
     }
 }
 
-private fun distance(a: Offset, b: Offset): Float = maxOf(abs(a.x - b.x), abs(a.y - b.y))
+private enum class TriggerHandle { LEFT, RIGHT }
+
+private fun pickTriggerHandle(touch: Offset, left: Offset, right: Offset): TriggerHandle {
+    val leftDistance = distance(touch, left)
+    val rightDistance = distance(touch, right)
+    val grabRadius = 150f
+    return when {
+        leftDistance <= grabRadius && leftDistance <= rightDistance -> TriggerHandle.LEFT
+        rightDistance <= grabRadius -> TriggerHandle.RIGHT
+        leftDistance <= rightDistance -> TriggerHandle.LEFT
+        else -> TriggerHandle.RIGHT
+    }
+}
+
+private fun distance(a: Offset, b: Offset): Float {
+    val dx = a.x - b.x
+    val dy = a.y - b.y
+    return kotlin.math.sqrt(dx * dx + dy * dy)
+}
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTriggerPoint(center: Offset, color: Color) {
     drawCircle(color.copy(alpha = 0.95f), radius = 42f, center = center)
