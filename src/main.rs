@@ -442,12 +442,13 @@ let mut s = shared.write().unwrap();
 
         if screen_on {
             if let Some(mgr) = triggers.as_ref() {
+                let preview_foreground = matches!(get_foreground_package().as_deref(), Some("com.example.aw22xxxconfig"));
                 let (preview_cfg, preview_pkg) = {
                     let s = shared.read().unwrap();
                     (s.trigger_preview.clone(), s.trigger_preview_package.clone())
                 };
                 let preview_cfg = preview_cfg.filter(|c| c.enabled && (c.left.enabled || c.right.enabled));
-                trigger_preview_active = preview_cfg.is_some();
+                trigger_preview_active = preview_foreground && preview_cfg.is_some();
                 if trigger_preview_active {
                     if last_triggers_cfg.is_some() {
                         mgr.disable();
