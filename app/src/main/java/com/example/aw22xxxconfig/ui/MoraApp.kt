@@ -38,7 +38,7 @@ fun MoraApp(viewModel: MoraViewModel) {
     Scaffold(
         containerColor = MoraBackground,
         bottomBar = {
-            if (currentRoute != MoraScreen.GAME_DETAIL.route) {
+            if (connection is ConnectionState.Ready && currentRoute != MoraScreen.GAME_DETAIL.route && currentRoute != MoraScreen.DEBLOAT.route && currentRoute != MoraScreen.FLASH_OC.route && currentRoute != MoraScreen.FLASH_ORANGEFOX.route) {
                 NavigationBar {
                     val items = listOf(
                         MoraScreen.HOME to ("Home" to Icons.Rounded.Home),
@@ -89,7 +89,50 @@ fun MoraApp(viewModel: MoraViewModel) {
                             }
                         }
                         composable(MoraScreen.LED.route) { LedScreen(viewModel) }
-                        composable(MoraScreen.SETTINGS.route) { SettingsScreen(viewModel) }
+                        composable(MoraScreen.SETTINGS.route) {
+                            SettingsScreen(
+                                viewModel = viewModel,
+                                openDebloat = { navController.navigate(MoraScreen.DEBLOAT.route) },
+                                openFlashOc = { navController.navigate(MoraScreen.FLASH_OC.route) },
+                                openFlashOrangeFox = { navController.navigate(MoraScreen.FLASH_ORANGEFOX.route) },
+                            )
+                        }
+                        composable(MoraScreen.FLASH_OC.route) {
+                            FlashImageScreen(
+                                viewModel = viewModel,
+                                title = "Flash overclocked image",
+                                subtitle = "Install OC vendor_boot for higher performance",
+                                warning = "This flashes the overclocked vendor_boot image to both vendor_boot slots. Use it only on Red Magic 9 Pro. Do not use it on any other device. A wrong image can cause bootloop. The phone will reboot automatically after flashing.",
+                                imagePath = "/data/adb/modules/mora_perf_deamon/images/vendor_boot_oc.img",
+                                firstBlock = "/dev/block/by-name/vendor_boot_a",
+                                secondBlock = "/dev/block/by-name/vendor_boot_b",
+                                confirmText = "I understand the risk and confirm this is a Red Magic 9 Pro.",
+                                buttonText = "Flash image and reboot",
+                                onBack = { navController.popBackStack() },
+                                onFlash = viewModel::flashOverclockVendorBoot,
+                            )
+                        }
+                        composable(MoraScreen.FLASH_ORANGEFOX.route) {
+                            FlashImageScreen(
+                                viewModel = viewModel,
+                                title = "Flash OrangeFox",
+                                subtitle = "Install OrangeFox Recovery",
+                                warning = "This flashes OrangeFox Recovery to both recovery slots. Use it only on compatible Red Magic 9 / 9 Pro / 9 Pro+ devices. A wrong image can break recovery boot. After flashing, the phone will reboot into Recovery mode.",
+                                imagePath = "/data/adb/modules/mora_perf_deamon/images/orangefox_recovery.img",
+                                firstBlock = "/dev/block/by-name/recovery_a",
+                                secondBlock = "/dev/block/by-name/recovery_b",
+                                confirmText = "I understand the risk and confirm this device is compatible.",
+                                buttonText = "Flash OrangeFox and boot Recovery",
+                                onBack = { navController.popBackStack() },
+                                onFlash = viewModel::flashOrangeFoxRecovery,
+                            )
+                        }
+                        composable(MoraScreen.DEBLOAT.route) {
+                            DebloatScreen(
+                                viewModel = viewModel,
+                                onBack = { navController.popBackStack() },
+                            )
+                        }
                         composable(
                             route = MoraScreen.GAME_DETAIL.route,
                             arguments = listOf(navArgument("packageName") { type = NavType.StringType })

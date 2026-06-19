@@ -1,9 +1,7 @@
 package com.example.aw22xxxconfig.data.model
 
-import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonNames
 
 @Serializable
 data class StateResponse(
@@ -80,26 +78,14 @@ data class UserConfig(
 @Serializable data class FanLedSetting(val mode: FanLedMode = FanLedMode.STEADY, val color: FanLedColor = FanLedColor.MIXED7)
 @Serializable data class ExternalLedSetting(val mode: ExternalLedMode = ExternalLedMode.STEADY, val color: ExternalLedColor = ExternalLedColor.RED)
 
-@Serializable enum class FanLedMode { @SerialName("off") OFF, @SerialName("flow") FLOW, @SerialName("breathe") BREATHE, @SerialName("flashing") FLASHING, @SerialName("burst_flash") BURST_FLASH, @SerialName("steady") STEADY }
-@OptIn(ExperimentalSerializationApi::class)
+@Serializable enum class FanLedMode { @SerialName("off") OFF, @SerialName("flow") FLOW, @SerialName("breathe") BREATHE, @SerialName("flashing") FLASHING, @SerialName("steady") STEADY }
 @Serializable enum class FanLedColor {
-    @SerialName("red") RED,
-    @SerialName("mix_color1") @JsonNames("mixed_1") MIXED1,
-    @SerialName("rose") ROSE,
-    @SerialName("mix_color2") @JsonNames("mixed_2") MIXED2,
-    @SerialName("orange") ORANGE,
-    @SerialName("mix_color3") @JsonNames("mixed_3") MIXED3,
-    @SerialName("yellow") YELLOW,
-    @SerialName("mix_color4") @JsonNames("mixed_4") MIXED4,
-    @SerialName("green") GREEN,
-    @SerialName("mix_color5") @JsonNames("mixed_5") MIXED5,
-    @SerialName("cyan") CYAN,
-    @SerialName("mix_color6") @JsonNames("mixed_6") MIXED6,
-    @SerialName("blue") BLUE,
-    @SerialName("mix_color7") @JsonNames("mixed_7") MIXED7,
-    @SerialName("purple") PURPLE
+    @SerialName("rose") ROSE, @SerialName("yellow") YELLOW, @SerialName("green") GREEN, @SerialName("blue") BLUE,
+    @SerialName("cyan") CYAN, @SerialName("purple") PURPLE, @SerialName("orange") ORANGE,
+    @SerialName("mixed_1") MIXED1, @SerialName("mixed_2") MIXED2, @SerialName("mixed_3") MIXED3, @SerialName("mixed_4") MIXED4,
+    @SerialName("mixed_5") MIXED5, @SerialName("mixed_6") MIXED6, @SerialName("mixed_7") MIXED7
 }
-@Serializable enum class ExternalLedMode { @SerialName("sound") SOUND, @SerialName("steady") STEADY, @SerialName("breathe") BREATHE, @SerialName("flashing") FLASHING, @SerialName("double_flash") DOUBLE_FLASH, @SerialName("flow") FLOW, @SerialName("ripple") RIPPLE, @SerialName("echo") ECHO, @SerialName("jump") JUMP, @SerialName("burst_flash") BURST_FLASH, @SerialName("cycle_flash") CYCLE_FLASH }
+@Serializable enum class ExternalLedMode { @SerialName("steady") STEADY, @SerialName("breathe") BREATHE, @SerialName("flashing") FLASHING }
 @Serializable enum class ExternalLedColor {
     @SerialName("multi") MULTI, @SerialName("red") RED, @SerialName("yellow") YELLOW, @SerialName("blue") BLUE,
     @SerialName("green") GREEN, @SerialName("cyan") CYAN, @SerialName("white") WHITE, @SerialName("purple") PURPLE,

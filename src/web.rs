@@ -1244,7 +1244,6 @@ struct GameSetTriggersPayload {
     triggers: TriggersConfig,
 }
 
-
 #[derive(Deserialize)]
 struct GameSetSplitChargePayload {
     package: String,
@@ -1458,7 +1457,6 @@ fn handle_api_games_set_triggers(
 
     games_watch::apply_and_persist(shared, games_path, file)
 }
-
 
 fn handle_api_games_set_split_charge(
     shared: &Arc<RwLock<SharedState>>,

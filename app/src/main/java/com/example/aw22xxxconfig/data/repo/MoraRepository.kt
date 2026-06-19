@@ -86,7 +86,6 @@ class MoraRepository(
         root = { rootHttpClient.post("api/games/set_triggers", requireToken(), GameSetTriggersPayload(packageName, triggers)); Unit }
     )
 
-
     suspend fun setSplitCharge(packageName: String, splitCharge: SplitChargeConfig) = tryLocalThenRoot(
         local = { client().setGameSplitCharge(GameSetSplitChargePayload(packageName, splitCharge)) },
         root = { rootHttpClient.post("api/games/set_split_charge", requireToken(), GameSetSplitChargePayload(packageName, splitCharge)); Unit }

@@ -9,15 +9,9 @@ import com.example.aw22xxxconfig.data.model.*
 import com.example.aw22xxxconfig.data.repo.MoraRepository
 import com.example.aw22xxxconfig.data.root.InstalledAppsProvider
 import com.example.aw22xxxconfig.data.root.RootShell
-import com.example.aw22xxxconfig.data.root.SystemMaintenance
 import com.example.aw22xxxconfig.data.root.TokenReader
-import com.example.aw22xxxconfig.data.root.TriggerPreviewHelper
-import com.example.aw22xxxconfig.data.root.TriggerPreviewState
-import com.example.aw22xxxconfig.data.root.VendorBootFlasher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,10 +28,98 @@ data class AndroidFeatureState(
     val rawDozeTapGesture: String = "?",
 )
 
-data class MaintenanceState(
-    val running: Boolean = false,
-    val log: String = "",
+private val DEBLOAT_ITEMS = listOf(
+    DebloatPackage("com.android.theme.icon_pack.filled.settings", "Filled settings icons"),
+    DebloatPackage("org.lineageos.recorder", "LineageOS Recorder"),
+    DebloatPackage("org.calyxos.bellis", "Bellis"),
+    DebloatPackage("com.android.theme.icon.teardrop", "Teardrop icons"),
+    DebloatPackage("com.android.theme.icon_pack.rounded.settings", "Rounded settings icons"),
+    DebloatPackage("com.android.theme.icon_pack.kai.android", "Kai Android icons"),
+    DebloatPackage("com.android.calllogbackup", "Call log backup"),
+    DebloatPackage("com.android.systemui.accessibility.accessibilitymenu", "Accessibility menu"),
+    DebloatPackage("com.android.dreams.phototable", "Photo table screensaver"),
+    DebloatPackage("com.android.theme.icon_pack.rounded.android", "Rounded Android icons"),
+    DebloatPackage("com.android.theme.icon_pack.kai.settings", "Kai settings icons"),
+    DebloatPackage("com.android.dreams.basic", "Basic screensaver"),
+    DebloatPackage("com.android.devicediagnostics.auto_generated_rro_product__", "Device diagnostics overlay"),
+    DebloatPackage("com.android.theme.icon_pack.sam.launcher", "Sam launcher icons"),
+    DebloatPackage("com.android.bookmarkprovider", "Bookmark provider"),
+    DebloatPackage("com.android.apps.tag", "NFC tags"),
+    DebloatPackage("com.android.DeviceAsWebcam", "Device as webcam"),
+    DebloatPackage("com.android.printservice.recommendation", "Print recommendation service"),
+    DebloatPackage("com.android.emergency.auto_generated_rro_product__", "Emergency overlay"),
+    DebloatPackage("com.android.managedprovisioning", "Managed provisioning"),
+    DebloatPackage("com.android.emergency", "Emergency"),
+    DebloatPackage("com.android.theme.icon.vessel", "Vessel icons"),
+    DebloatPackage("org.lineageos.overlay.font.rubik", "Rubik font overlay"),
+    DebloatPackage("com.android.internal.display.cutout.emulation.double", "Double cutout emulation"),
+    DebloatPackage("com.android.theme.font.notoserifsource", "Noto Serif font"),
+    DebloatPackage("org.lineageos.overlay.font.lato", "Lato font overlay"),
+    DebloatPackage("com.android.theme.icon.pebble", "Pebble icons"),
+    DebloatPackage("com.android.role.notes.enabled", "Notes role"),
+    DebloatPackage("com.android.theme.icon_pack.circular.settings", "Circular settings icons"),
+    DebloatPackage("com.android.devicediagnostics", "Device diagnostics"),
+    DebloatPackage("com.android.theme.icon_pack.victor.systemui", "Victor SystemUI icons"),
+    DebloatPackage("com.android.avatarpicker", "Avatar picker"),
+    DebloatPackage("com.android.theme.icon.roundedrect", "Rounded rectangle icons"),
+    DebloatPackage("com.stevesoltys.seedvault", "Seedvault backup"),
+    DebloatPackage("org.calyxos.backup.contacts", "Contacts backup"),
+    DebloatPackage("com.android.wallpaperbackup", "Wallpaper backup"),
+    DebloatPackage("com.android.egg", "Android Easter egg"),
+    DebloatPackage("com.android.theme.icon_pack.circular.android", "Circular Android icons"),
+    DebloatPackage("com.android.theme.icon.square", "Square icons"),
+    DebloatPackage("com.android.theme.icon_pack.victor.launcher", "Victor launcher icons"),
+    DebloatPackage("com.android.stk", "SIM Toolkit"),
+    DebloatPackage("com.android.internal.display.cutout.emulation.hole", "Hole cutout emulation"),
+    DebloatPackage("com.android.theme.icon.squircle", "Squircle icons"),
+    DebloatPackage("com.android.internal.display.cutout.emulation.tall", "Tall cutout emulation"),
+    DebloatPackage("com.android.theme.icon_pack.kai.launcher", "Kai launcher icons"),
+    DebloatPackage("com.android.theme.icon_pack.circular.launcher", "Circular launcher icons"),
+    DebloatPackage("com.android.theme.icon_pack.filled.launcher", "Filled launcher icons"),
+    DebloatPackage("com.android.theme.icon_pack.rounded.launcher", "Rounded launcher icons"),
+    DebloatPackage("org.lineageos.profiles", "LineageOS Profiles"),
+    DebloatPackage("org.lineageos.backgrounds", "LineageOS Backgrounds"),
+    DebloatPackage("com.android.providers.downloads.ui", "Downloads UI"),
+    DebloatPackage("com.android.theme.icon_pack.victor.android", "Victor Android icons"),
+    DebloatPackage("com.android.theme.icon_pack.circular.systemui", "Circular SystemUI icons"),
+    DebloatPackage("org.lineageos.twelve", "LineageOS Music"),
+    DebloatPackage("com.android.theme.icon_pack.sam.settings", "Sam settings icons"),
+    DebloatPackage("com.android.simappdialog", "SIM app dialog"),
+    DebloatPackage("com.android.wallpaper.livepicker", "Live wallpaper picker"),
+    DebloatPackage("com.android.theme.icon_pack.kai.systemui", "Kai SystemUI icons"),
+    DebloatPackage("com.android.theme.icon.taperedrect", "Tapered rectangle icons"),
+    DebloatPackage("org.lineageos.jelly", "LineageOS Jelly browser"),
+    DebloatPackage("com.android.internal.display.cutout.emulation.waterfall", "Waterfall cutout emulation"),
+    DebloatPackage("com.dsi.ant.server", "ANT service"),
+    DebloatPackage("com.android.cellbroadcastreceiver", "Cell broadcast receiver"),
+    DebloatPackage("com.android.theme.icon_pack.sam.systemui", "Sam SystemUI icons"),
+    DebloatPackage("com.android.systemui.plugin.globalactions.wallet", "Wallet power menu plugin"),
+    DebloatPackage("com.android.theme.icon_pack.filled.systemui", "Filled SystemUI icons"),
+    DebloatPackage("com.android.htmlviewer", "HTML Viewer"),
+    DebloatPackage("org.lineageos.camelot", "LineageOS Camelot"),
+    DebloatPackage("com.android.theme.icon_pack.rounded.systemui", "Rounded SystemUI icons"),
+    DebloatPackage("com.android.providers.userdictionary", "User dictionary"),
+    DebloatPackage("com.android.internal.display.cutout.emulation.corner", "Corner cutout emulation"),
+    DebloatPackage("com.android.theme.icon_pack.filled.android", "Filled Android icons"),
+    DebloatPackage("com.android.theme.icon_pack.victor.settings", "Victor settings icons"),
+    DebloatPackage("com.android.dynsystem", "Dynamic System Updates"),
+    DebloatPackage("com.android.inputdevices", "Input devices"),
+    DebloatPackage("com.android.theme.icon_pack.sam.android", "Sam Android icons"),
+    DebloatPackage("com.tencent.soter.soterserver", "Tencent Soter"),
+    DebloatPackage("com.android.healthconnect.controller", "Health Connect"),
+    DebloatPackage("org.lineageos.aperture", "LineageOS Aperture camera"),
+    DebloatPackage("com.google.android.feedback", "Google Feedback"),
+    DebloatPackage("com.android.bips", "Default print service"),
+    DebloatPackage("com.google.android.marvin.talkback", "TalkBack"),
+    DebloatPackage("com.google.android.apps.wellbeing", "Digital Wellbeing"),
+    DebloatPackage("com.android.cellbroadcastreceiver.module", "Cell broadcast module"),
+    DebloatPackage("com.google.android.projection.gearhead", "Android Auto"),
+    DebloatPackage("org.lineageos.audiofx", "LineageOS AudioFX"),
 )
+
+private const val FLASH_IMAGES_DIR = "/data/adb/modules/mora_perf_deamon/images"
+private const val VENDOR_BOOT_OC_IMAGE = "$FLASH_IMAGES_DIR/vendor_boot_oc.img"
+private const val ORANGEFOX_RECOVERY_IMAGE = "$FLASH_IMAGES_DIR/orangefox_recovery.img"
 
 class MoraViewModel(
     private val appContext: Context,
@@ -66,11 +148,14 @@ class MoraViewModel(
     private val _androidFeatures = MutableStateFlow(AndroidFeatureState(loading = true))
     val androidFeatures: StateFlow<AndroidFeatureState> = _androidFeatures.asStateFlow()
 
-    private val _maintenance = MutableStateFlow(MaintenanceState())
-    val maintenance: StateFlow<MaintenanceState> = _maintenance.asStateFlow()
+    private val _debloatPackages = MutableStateFlow(DEBLOAT_ITEMS.map { DebloatPackageState(it) })
+    val debloatPackages: StateFlow<List<DebloatPackageState>> = _debloatPackages.asStateFlow()
 
-    private val triggerPreviewHelper = TriggerPreviewHelper()
-    val triggerPreview: StateFlow<TriggerPreviewState> = triggerPreviewHelper.state
+    private val _debloatLoading = MutableStateFlow(false)
+    val debloatLoading: StateFlow<Boolean> = _debloatLoading.asStateFlow()
+
+    private val _flashImageState = MutableStateFlow(FlashImageState())
+    val flashImageState: StateFlow<FlashImageState> = _flashImageState.asStateFlow()
 
     private var refreshJob: Job? = null
 
@@ -175,12 +260,6 @@ class MoraViewModel(
     fun refresh() {
         viewModelScope.launch {
             runCatching { refreshAll() }.onFailure { _message.value = it.message }
-        }
-    }
-
-    fun refreshStateOnly() {
-        viewModelScope.launch {
-            runCatching { _state.value = repository.state() }.onFailure { _message.value = it.message }
         }
     }
 
@@ -292,60 +371,166 @@ class MoraViewModel(
         }
     }
 
-
-    fun checkSystemCleanup(includeKeyboard: Boolean) {
-        runMaintenance { SystemMaintenance.checkDebloatTargets(includeKeyboard).getOrThrow() }
-    }
-
-    fun runSystemCleanup(includeKeyboard: Boolean) {
-        runMaintenance { SystemMaintenance.runDebloat(includeKeyboard).getOrThrow() }
-    }
-
-    fun restoreSystemCleanup(includeKeyboard: Boolean) {
-        runMaintenance { SystemMaintenance.restoreDebloat(includeKeyboard).getOrThrow() }
-    }
-
-    fun flashVendorBoot() {
-        runMaintenance { VendorBootFlasher.flash().getOrThrow() }
-    }
-
-    fun grantOverlayPermission() {
-        runMaintenance { SystemMaintenance.grantOverlayPermission(appContext.packageName).getOrThrow() }
-    }
-
-    fun checkOverlayPermission() {
-        runMaintenance { SystemMaintenance.checkOverlayPermission(appContext.packageName).getOrThrow() }
-    }
-
-    fun startTriggerPreview() {
-        triggerPreviewHelper.start()
-    }
-
-    fun stopTriggerPreview() {
-        triggerPreviewHelper.stop()
-    }
-
-    fun isVendorBootSupportedDevice(): Boolean = VendorBootFlasher.isSupportedDevice()
-
-
-    private fun runMaintenance(block: suspend () -> String) {
+    fun refreshDebloatPackages() {
         viewModelScope.launch {
-            _maintenance.value = _maintenance.value.copy(running = true)
-            runCatching { withContext(Dispatchers.IO) { block() } }
-                .onSuccess { _maintenance.value = MaintenanceState(running = false, log = it) }
-                .onFailure {
-                    val text = it.message ?: it.toString()
-                    _maintenance.value = MaintenanceState(running = false, log = text)
-                    _message.value = text
+            _debloatLoading.value = true
+            runCatching {
+                val installed = RootShell.exec("pm list packages").getOrThrow()
+                    .lineSequence()
+                    .mapNotNull { it.trim().removePrefix("package:").takeIf(String::isNotBlank) }
+                    .toSet()
+                val disabled = RootShell.exec("pm list packages -d").getOrElse { "" }
+                    .lineSequence()
+                    .mapNotNull { it.trim().removePrefix("package:").takeIf(String::isNotBlank) }
+                    .toSet()
+                _debloatPackages.value = DEBLOAT_ITEMS.map { item ->
+                    DebloatPackageState(
+                        item = item,
+                        installed = item.packageName in installed || item.packageName in disabled,
+                        enabled = item.packageName !in disabled,
+                    )
                 }
+            }.onFailure {
+                _message.value = it.message
+            }
+            _debloatLoading.value = false
         }
     }
-    fun appForPackage(packageName: String): InstalledApp? = _installedApps.value.firstOrNull { it.packageName == packageName }
 
-    override fun onCleared() {
-        triggerPreviewHelper.stop()
-        super.onCleared()
+    fun setDebloatPackageEnabled(packageName: String, enabled: Boolean) {
+        viewModelScope.launch {
+            _debloatLoading.value = true
+            runCatching {
+                if (enabled) {
+                    RootShell.exec("pm enable ${squote(packageName)}").getOrThrow()
+                } else {
+                    RootShell.exec(
+                        listOf(
+                            "pm clear ${squote(packageName)}",
+                            "am force-stop ${squote(packageName)}",
+                            "pm disable-user --user 0 ${squote(packageName)}",
+                        ).joinToString("; ")
+                    ).getOrThrow()
+                }
+                refreshDebloatPackagesNow()
+            }.onFailure {
+                _message.value = it.message
+                refreshDebloatPackagesNow(errorPackage = packageName, error = it.message)
+            }
+            _debloatLoading.value = false
+        }
     }
+
+    fun setAllDebloatPackagesEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            _debloatLoading.value = true
+            runCatching {
+                val targets = _debloatPackages.value.filter { it.installed && it.enabled != enabled }
+                for (state in targets) {
+                    val pkg = state.item.packageName
+                    if (enabled) {
+                        RootShell.exec("pm enable ${squote(pkg)}").getOrThrow()
+                    } else {
+                        RootShell.exec(
+                            listOf(
+                                "pm clear ${squote(pkg)}",
+                                "am force-stop ${squote(pkg)}",
+                                "pm disable-user --user 0 ${squote(pkg)}",
+                            ).joinToString("; ")
+                        ).getOrThrow()
+                    }
+                }
+                refreshDebloatPackagesNow()
+            }.onFailure {
+                _message.value = it.message
+                refreshDebloatPackagesNow(error = it.message)
+            }
+            _debloatLoading.value = false
+        }
+    }
+
+    private fun refreshDebloatPackagesNow(errorPackage: String? = null, error: String? = null) {
+        val installed = RootShell.exec("pm list packages").getOrElse { "" }
+            .lineSequence()
+            .mapNotNull { it.trim().removePrefix("package:").takeIf(String::isNotBlank) }
+            .toSet()
+        val disabled = RootShell.exec("pm list packages -d").getOrElse { "" }
+            .lineSequence()
+            .mapNotNull { it.trim().removePrefix("package:").takeIf(String::isNotBlank) }
+            .toSet()
+        _debloatPackages.value = DEBLOAT_ITEMS.map { item ->
+            DebloatPackageState(
+                item = item,
+                installed = item.packageName in installed || item.packageName in disabled,
+                enabled = item.packageName !in disabled,
+                error = if (errorPackage == null || errorPackage == item.packageName) error else null,
+            )
+        }
+    }
+
+    private fun squote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+    fun flashOverclockVendorBoot() {
+        flashImage(
+            imagePath = VENDOR_BOOT_OC_IMAGE,
+            firstBlock = "/dev/block/by-name/vendor_boot_a",
+            secondBlock = "/dev/block/by-name/vendor_boot_b",
+            rebootCommand = "svc power reboot || reboot",
+        )
+    }
+
+    fun flashOrangeFoxRecovery() {
+        flashImage(
+            imagePath = ORANGEFOX_RECOVERY_IMAGE,
+            firstBlock = "/dev/block/by-name/recovery_a",
+            secondBlock = "/dev/block/by-name/recovery_b",
+            rebootCommand = "svc power reboot recovery || reboot recovery",
+        )
+    }
+
+    private fun flashImage(
+        imagePath: String,
+        firstBlock: String,
+        secondBlock: String,
+        rebootCommand: String,
+    ) {
+        viewModelScope.launch {
+            _flashImageState.value = FlashImageState(loading = true, message = "Flashing image...")
+            runCatching {
+                RootShell.exec(buildFlashImageCommand(imagePath, firstBlock, secondBlock, rebootCommand)).getOrThrow()
+            }.onSuccess {
+                _flashImageState.value = FlashImageState(
+                    loading = false,
+                    message = "Image flashed successfully. Rebooting in 5 seconds.",
+                )
+            }.onFailure {
+                _flashImageState.value = FlashImageState(loading = false, message = it.message)
+                _message.value = it.message
+            }
+        }
+    }
+
+    private fun buildFlashImageCommand(
+        imagePath: String,
+        firstBlock: String,
+        secondBlock: String,
+        rebootCommand: String,
+    ): String = """
+        IMG=${squote(imagePath)}
+        FIRST=${squote(firstBlock)}
+        SECOND=${squote(secondBlock)}
+        [ -f "${'$'}IMG" ] || { echo "Image not found: ${'$'}IMG"; exit 1; }
+        [ -s "${'$'}IMG" ] || { echo "Image is empty: ${'$'}IMG"; exit 1; }
+        [ -b "${'$'}FIRST" ] || { echo "Block device not found: ${'$'}FIRST"; exit 1; }
+        [ -b "${'$'}SECOND" ] || { echo "Block device not found: ${'$'}SECOND"; exit 1; }
+        dd if="${'$'}IMG" of="${'$'}FIRST" bs=4M conv=fsync || exit 1
+        dd if="${'$'}IMG" of="${'$'}SECOND" bs=4M conv=fsync || exit 1
+        sync
+        ( sleep 5; $rebootCommand ) >/dev/null 2>&1 &
+        echo "Image flashed successfully. Rebooting in 5 seconds."
+    """.trimIndent()
+
+    fun appForPackage(packageName: String): InstalledApp? = _installedApps.value.firstOrNull { it.packageName == packageName }
 
     companion object {
         fun factory(context: Context): ViewModelProvider.Factory = object : ViewModelProvider.Factory {

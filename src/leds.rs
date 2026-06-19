@@ -54,18 +54,10 @@ fn write_effect_and_cfg(effect: &str) -> io::Result<()> {
 /// Any other mode is normalized to steady.
 fn external_mode_base(m: ExternalLedMode) -> u64 {
     match m {
-        ExternalLedMode::Sound => 80,
-        ExternalLedMode::Static => 96,
-        ExternalLedMode::Breath => 112,
-        ExternalLedMode::Blink => 128,
-        ExternalLedMode::DoubleFlash => 144,
-        ExternalLedMode::Flow => 160,
-        ExternalLedMode::Ripple => 176,
-        ExternalLedMode::Echo => 192,
-        ExternalLedMode::Jump => 208,
-        ExternalLedMode::BurstFlash => 224,
-        ExternalLedMode::CycleFlash => 240,
-        ExternalLedMode::Sparkle => 144
+        ExternalLedMode::Static => 96,  // 0x60
+        ExternalLedMode::Breath => 112, // 0x70
+        ExternalLedMode::Blink => 128,  // 0x80
+        _ => 96, // normalize unsupported -> steady
     }
 }
 
@@ -84,7 +76,7 @@ fn external_color_idx(mode: ExternalLedMode, c: ExternalLedColor) -> u64 {
     // closest available slot for the selected mode. Unsupported colors fall back.
     let m = match mode {
         ExternalLedMode::Static | ExternalLedMode::Breath | ExternalLedMode::Blink => mode,
-        _ => ExternalLedMode::Static, // APK mode without per-color palette -> steady color slots
+        _ => ExternalLedMode::Static, // normalize unsupported -> steady
     };
 
     match m {
@@ -136,9 +128,9 @@ fn external_code(setting: &ExternalLedSetting) -> String {
 
 fn fan_color_nibble(c: FanLedColor) -> u8 {
     match c {
-        // APK exposes red and rose separately. Probe data showed rose/pink on 0x6;
-        // keep red on the first solid-color nibble so it is distinct from rose.
-        FanLedColor::Red => 0x0,
+        // Corrected according to probe log:
+        //   code a1 looked purple, code a6 looked pink/rose.
+        // Swap rose<->purple compared to the APK's nominal naming.
         FanLedColor::Rose => 0x6,
         FanLedColor::Yellow => 0x2,
         FanLedColor::Green => 0x3,
@@ -160,7 +152,6 @@ fn fan_base(m: FanLedMode, c: FanLedColor) -> u8 {
     match m {
         FanLedMode::Off => 0x00, // not used (off handled by code=2)
         FanLedMode::Blink => 0x20,
-        FanLedMode::BurstFlash => 0x50,
         FanLedMode::Breath => 0x30,
         FanLedMode::Flow => 0x40,
         FanLedMode::Static => {

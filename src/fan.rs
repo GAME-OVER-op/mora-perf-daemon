@@ -1,7 +1,7 @@
 
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{collections::HashMap, path::{Path, PathBuf}, process::{Command, Stdio}};
 
-use crate::{config, nubia_parts, sysfs};
+use crate::{config, sysfs};
 
 pub struct Fan {
     enable_path: PathBuf,
@@ -15,6 +15,26 @@ impl Fan {
         self.level
     }
 
+fn set_nubia_parts_fan_enable(enable: bool) {
+    let val = if enable { "1" } else { "0" };
+
+    // Try direct call first (daemon often runs as root).
+    let st = Command::new("settings")
+        .args(["put", "global", "nubia_parts_fan_enable", val])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    if st.is_err() || !st.as_ref().ok().map(|x| x.success()).unwrap_or(false) {
+        // Fallback via shell.
+        let cmd = format!("settings put global nubia_parts_fan_enable {}", val);
+        let _ = Command::new("/system/bin/sh")
+            .args(["-c", &cmd])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
     pub fn new() -> Option<Self> {
         let enable_path = PathBuf::from(config::FAN_ENABLE);
         let level_path = PathBuf::from(config::FAN_LEVEL);
@@ -56,7 +76,7 @@ impl Fan {
 
         if self.level == 0 {
             let _ = sysfs::write_u64_if_needed(&self.enable_path, 0, cache, true);
-            if prev != 0 { nubia_parts::set_fan_enable(false); }
+            if prev != 0 { Self::set_nubia_parts_fan_enable(false); }
             println!("FAN: off");
             return;
         }
@@ -65,8 +85,7 @@ impl Fan {
         let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, true);
         let _ = sysfs::write_u64_if_needed(&self.level_path, v, cache, true);
         let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, true);
-        if prev == 0 && self.level != 0 { nubia_parts::set_fan_enable(true); }
-        nubia_parts::set_fan_speed_level(self.level);
+        if prev == 0 && self.level != 0 { Self::set_nubia_parts_fan_enable(true); }
         println!("FAN: {}", self.level);
     }
 
@@ -122,7 +141,7 @@ impl Fan {
 
         if self.level == 0 {
             let _ = sysfs::write_u64_if_needed(&self.enable_path, 0, cache, true);
-            if prev != 0 { nubia_parts::set_fan_enable(false); }
+            if prev != 0 { Self::set_nubia_parts_fan_enable(false); }
             println!("FAN: off");
             return;
         }
@@ -131,8 +150,7 @@ impl Fan {
         let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, true);
         let _ = sysfs::write_u64_if_needed(&self.level_path, lvl, cache, true);
         let _ = sysfs::write_u64_if_needed(&self.enable_path, 1, cache, true);
-        if prev == 0 && self.level != 0 { nubia_parts::set_fan_enable(true); }
-        nubia_parts::set_fan_speed_level(self.level);
+        if prev == 0 && self.level != 0 { Self::set_nubia_parts_fan_enable(true); }
         println!("FAN: {}", self.level);
     }
 }

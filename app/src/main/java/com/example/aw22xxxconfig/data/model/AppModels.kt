@@ -14,12 +14,32 @@ data class InstalledApp(
     val icon: Drawable? = null,
 )
 
+data class DebloatPackage(
+    val packageName: String,
+    val title: String,
+)
+
+data class DebloatPackageState(
+    val item: DebloatPackage,
+    val installed: Boolean = false,
+    val enabled: Boolean = false,
+    val error: String? = null,
+)
+
+data class FlashImageState(
+    val loading: Boolean = false,
+    val message: String? = null,
+)
+
 enum class MoraScreen(val route: String) {
     HOME("home"),
     PROFILES("profiles"),
     GAMES("games"),
     LED("led"),
     SETTINGS("settings"),
+    DEBLOAT("settings/debloat"),
+    FLASH_OC("settings/flash-oc"),
+    FLASH_ORANGEFOX("settings/flash-orangefox"),
     GAME_DETAIL("games/detail/{packageName}");
 
     fun detailRoute(packageName: String) = "games/detail/$packageName"

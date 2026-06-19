@@ -1,28 +1,27 @@
 package com.example.aw22xxxconfig.ui.screens
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.*
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.example.aw22xxxconfig.MoraViewModel
+import com.example.aw22xxxconfig.data.model.GameEntry
 import com.example.aw22xxxconfig.data.model.TriggerPoint
 import com.example.aw22xxxconfig.data.model.TriggersConfig
 import com.example.aw22xxxconfig.ui.components.MoraCard
@@ -33,31 +32,18 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
     val games by viewModel.games.collectAsState()
     val app = viewModel.appForPackage(packageName)
     val game = games.firstOrNull { it.packageName == packageName }
-    val triggerPreview by viewModel.triggerPreview.collectAsState()
 
     if (game == null) {
         ErrorScreen(message = "Game not found", onRetry = onBack)
         return
     }
 
+    var triggerDialog by remember { mutableStateOf<String?>(null) }
     var splitChargePercent by remember(game.packageName, game.splitCharge.stopBatteryPercent) {
         mutableFloatStateOf(game.splitCharge.stopBatteryPercent.toFloat())
     }
-    var showTriggerEditor by remember { mutableStateOf(false) }
-    var previewLeft by remember(game.packageName) { mutableStateOf(Offset(180f, 520f)) }
-    var previewRight by remember(game.packageName) { mutableStateOf(Offset(936f, 520f)) }
 
-    fun openTriggerEditor(left: TriggerPoint, right: TriggerPoint) {
-        previewLeft = Offset(left.x.ifZero(180).toFloat(), left.y.ifZero(520).toFloat())
-        previewRight = Offset(right.x.ifZero(936).toFloat(), right.y.ifZero(520).toFloat())
-        showTriggerEditor = true
-        viewModel.startTriggerPreview()
-    }
-
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, contentDescription = null) }
             Column {
@@ -122,43 +108,32 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
             SettingRow("Enable trigger mode", triggers.enabled) {
                 viewModel.setGameTriggers(packageName, triggers.copy(enabled = it))
             }
-            FilledTonalButton(onClick = { openTriggerEditor(triggers.left, triggers.right) }) { Text("Configure trigger points") }
-            TriggerSummary("Left trigger", triggers.left, onPick = { openTriggerEditor(triggers.left, triggers.right) }) {
+            TriggerSummary("Left trigger", triggers.left, onPick = { triggerDialog = "left" }) {
                 viewModel.setGameTriggers(packageName, triggers.copy(left = TriggerPoint(enabled = false, x = triggers.left.x, y = triggers.left.y)))
             }
-            TriggerSummary("Right trigger", triggers.right, onPick = { openTriggerEditor(triggers.left, triggers.right) }) {
+            TriggerSummary("Right trigger", triggers.right, onPick = { triggerDialog = "right" }) {
                 viewModel.setGameTriggers(packageName, triggers.copy(right = TriggerPoint(enabled = false, x = triggers.right.x, y = triggers.right.y)))
             }
         }
     }
 
-    if (showTriggerEditor) {
+    if (triggerDialog != null) {
         TriggerPickerFullscreen(
-            initialLeft = previewLeft,
-            initialRight = previewRight,
-            leftPressed = triggerPreview.leftPressed,
-            rightPressed = triggerPreview.rightPressed,
-            errorText = triggerPreview.error,
-            onDismiss = {
-                showTriggerEditor = false
-                viewModel.stopTriggerPreview()
-            },
-            onSave = { left, right ->
-                val triggers = game.triggers ?: TriggersConfig(enabled = true)
-                val updated = triggers.copy(
-                    enabled = true,
-                    left = TriggerPoint(true, left.x.roundToInt().coerceAtLeast(0), left.y.roundToInt().coerceAtLeast(0)),
-                    right = TriggerPoint(true, right.x.roundToInt().coerceAtLeast(0), right.y.roundToInt().coerceAtLeast(0)),
-                )
-                showTriggerEditor = false
-                viewModel.stopTriggerPreview()
+            title = if (triggerDialog == "left") "Left trigger" else "Right trigger",
+            onDismiss = { triggerDialog = null },
+            onPicked = { x, y ->
+                val current = game.triggers ?: TriggersConfig(enabled = true)
+                val updated = if (triggerDialog == "left") {
+                    current.copy(enabled = true, left = TriggerPoint(true, x, y))
+                } else {
+                    current.copy(enabled = true, right = TriggerPoint(true, x, y))
+                }
                 viewModel.setGameTriggers(packageName, updated)
+                triggerDialog = null
             }
         )
     }
 }
-
-private fun Int.ifZero(default: Int): Int = if (this == 0) default else this
 
 @Composable
 private fun SettingRow(label: String, checked: Boolean, onChanged: (Boolean) -> Unit) {
@@ -181,19 +156,7 @@ private fun TriggerSummary(title: String, point: TriggerPoint, onPick: () -> Uni
 }
 
 @Composable
-private fun TriggerPickerFullscreen(
-    initialLeft: Offset,
-    initialRight: Offset,
-    leftPressed: Boolean,
-    rightPressed: Boolean,
-    errorText: String?,
-    onDismiss: () -> Unit,
-    onSave: (Offset, Offset) -> Unit,
-) {
-    var left by remember { mutableStateOf(initialLeft) }
-    var right by remember { mutableStateOf(initialRight) }
-    var dragTarget by remember { mutableStateOf<TriggerHandle?>(null) }
-
+private fun TriggerPickerFullscreen(title: String, onDismiss: () -> Unit, onPicked: (Int, Int) -> Unit) {
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
@@ -201,96 +164,41 @@ private fun TriggerPickerFullscreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xF0050506))
+                .background(Color(0xFF090B10))
                 .pointerInput(Unit) {
-                    fun clampPoint(p: Offset): Offset = Offset(
-                        p.x.coerceIn(0f, size.width.toFloat().coerceAtLeast(1f)),
-                        p.y.coerceIn(0f, size.height.toFloat().coerceAtLeast(1f)),
-                    )
-                    detectDragGestures(
-                        onDragStart = { pos -> dragTarget = pickTriggerHandle(pos, left, right) },
-                        onDragEnd = { dragTarget = null },
-                        onDragCancel = { dragTarget = null },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            when (dragTarget) {
-                                TriggerHandle.LEFT -> left = clampPoint(left + dragAmount)
-                                TriggerHandle.RIGHT -> right = clampPoint(right + dragAmount)
-                                null -> Unit
-                            }
-                        }
-                    )
+                    detectTapGestures { offset ->
+                        val x = (offset.x / size.width.toFloat() * 1116f).roundToInt().coerceAtLeast(0)
+                        val y = (offset.y / size.height.toFloat() * 2480f).roundToInt().coerceAtLeast(0)
+                        onPicked(x, y)
+                    }
                 }
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val h = size.height
-                val w = size.width
-                val blue = if (leftPressed) Color(0xFF86B7FF) else Color(0xFF3A86FF)
-                val red = if (rightPressed) Color(0xFFFF8BA0) else Color(0xFFFF3B5C)
-                drawRoundRect(blue.copy(alpha = if (leftPressed) 0.85f else 0.35f), topLeft = Offset(18f, h * 0.18f), size = Size(28f, h * 0.64f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18f, 18f))
-                drawRoundRect(red.copy(alpha = if (rightPressed) 0.85f else 0.35f), topLeft = Offset(w - 46f, h * 0.18f), size = Size(28f, h * 0.64f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(18f, 18f))
-                drawLine(blue.copy(alpha = if (leftPressed) 1f else 0.55f), Offset(44f, left.y), Offset(left.x, left.y), strokeWidth = if (leftPressed) 14f else 8f, cap = StrokeCap.Round)
-                drawLine(red.copy(alpha = if (rightPressed) 1f else 0.55f), Offset(w - 44f, right.y), Offset(right.x, right.y), strokeWidth = if (rightPressed) 14f else 8f, cap = StrokeCap.Round)
-                drawTriggerPoint(left, blue, leftPressed)
-                drawTriggerPoint(right, red, rightPressed)
-            }
-
             Column(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(16.dp)
-                    .background(Color(0xCC111318), RoundedCornerShape(18.dp))
-                    .padding(horizontal = 18.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .align(Alignment.Center)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("Trigger coordinates", style = MaterialTheme.typography.titleMedium)
-                Text("Preview is isolated from daemon trigger runtime.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(title, style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    when {
-                        errorText != null -> errorText
-                        leftPressed && rightPressed -> "Both triggers pressed"
-                        leftPressed -> "Left trigger pressed"
-                        rightPressed -> "Right trigger pressed"
-                        else -> "Waiting for trigger press"
-                    },
-                    color = if (errorText != null) MaterialTheme.colorScheme.error else if (leftPressed || rightPressed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Tap the point where the trigger should press.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "The whole screen is active.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            Row(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(18.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
             ) {
-                Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2B2B33))) { Text("Cancel") }
-                Button(onClick = { onSave(left, right) }) { Text("Save") }
+                Text("Cancel")
             }
         }
     }
-}
-
-private enum class TriggerHandle { LEFT, RIGHT }
-
-private fun pickTriggerHandle(touch: Offset, left: Offset, right: Offset): TriggerHandle {
-    val leftDistance = distance(touch, left)
-    val rightDistance = distance(touch, right)
-    val grabRadius = 180f
-    return when {
-        leftDistance <= grabRadius && leftDistance <= rightDistance -> TriggerHandle.LEFT
-        rightDistance <= grabRadius -> TriggerHandle.RIGHT
-        leftDistance <= rightDistance -> TriggerHandle.LEFT
-        else -> TriggerHandle.RIGHT
-    }
-}
-
-private fun distance(a: Offset, b: Offset): Float {
-    val dx = a.x - b.x
-    val dy = a.y - b.y
-    return kotlin.math.sqrt(dx * dx + dy * dy)
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTriggerPoint(center: Offset, color: Color, active: Boolean) {
-    drawCircle(color.copy(alpha = if (active) 1f else 0.95f), radius = if (active) 52f else 46f, center = center)
-    drawCircle(Color.Black.copy(alpha = 0.35f), radius = if (active) 52f else 46f, center = center, style = Stroke(width = if (active) 6f else 4f))
-    drawLine(Color.White, Offset(center.x - 22f, center.y), Offset(center.x + 22f, center.y), strokeWidth = if (active) 7f else 5f, cap = StrokeCap.Round)
-    drawLine(Color.White, Offset(center.x, center.y - 22f), Offset(center.x, center.y + 22f), strokeWidth = if (active) 7f else 5f, cap = StrokeCap.Round)
 }

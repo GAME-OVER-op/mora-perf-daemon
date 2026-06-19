@@ -40,6 +40,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     os::unix::io::{AsRawFd, RawFd},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
@@ -112,6 +113,12 @@ const EVIOCGRAB: u32 = iow(b'E', 0x90, 4);
 
 const BUS_VIRTUAL: u16 = 0x06;
 
+const TRIGGER_ENABLE_SETTING: &str = "nubia_parts_trigger_enable";
+const TRIGGER_LEFT_MODE_PATH: &str = "/proc/nubia_key/sar0/mode_operation";
+const TRIGGER_RIGHT_MODE_PATH: &str = "/proc/nubia_key/sar1/mode_operation";
+const TRIGGER_MODE_ON: &str = "1";
+const TRIGGER_MODE_OFF: &str = "0";
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct InputId {
@@ -155,6 +162,50 @@ fn read_to_string(path: &Path) -> io::Result<String> {
     let mut s = String::new();
     fs::File::open(path)?.read_to_string(&mut s)?;
     Ok(s)
+}
+
+fn set_nubia_parts_trigger_enable(enable: bool) {
+    let val = if enable { "1" } else { "0" };
+
+    let st = Command::new("settings")
+        .args(["put", "global", TRIGGER_ENABLE_SETTING, val])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    if st.is_err() || !st.as_ref().ok().map(|x| x.success()).unwrap_or(false) {
+        let cmd = format!("settings put global {} {}", TRIGGER_ENABLE_SETTING, val);
+        let _ = Command::new("/system/bin/sh")
+            .args(["-c", &cmd])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn write_trigger_mode(path: &str, mode: &str) {
+    let p = Path::new(path);
+    if !p.exists() {
+        eprintln!("TRIGSYS: {} missing", path);
+        return;
+    }
+    if let Err(e) = fs::write(p, format!("{}\n", mode).as_bytes()) {
+        eprintln!("TRIGSYS: write {}={} failed: {}", path, mode, e);
+    }
+}
+
+fn set_system_triggers_enabled(enable: bool) {
+    if enable {
+        set_nubia_parts_trigger_enable(true);
+        write_trigger_mode(TRIGGER_LEFT_MODE_PATH, TRIGGER_MODE_ON);
+        write_trigger_mode(TRIGGER_RIGHT_MODE_PATH, TRIGGER_MODE_ON);
+        println!("TRIGSYS: enabled");
+    } else {
+        set_nubia_parts_trigger_enable(false);
+        write_trigger_mode(TRIGGER_LEFT_MODE_PATH, TRIGGER_MODE_OFF);
+        write_trigger_mode(TRIGGER_RIGHT_MODE_PATH, TRIGGER_MODE_OFF);
+        println!("TRIGSYS: disabled");
+    }
 }
 
 // sysfs capabilities printed as 64-bit hex chunks
@@ -571,6 +622,7 @@ struct Inner {
 
     // global enable (game foreground + screen on + triggers.enabled)
     active: AtomicBool,
+    system_enabled: AtomicBool,
     gen: AtomicU64,
 
     // per-side enable and mapped ABS coords
@@ -653,6 +705,7 @@ impl TriggerManager {
             uif: uif_arc.clone(),
             stop: AtomicBool::new(false),
             active: AtomicBool::new(false),
+            system_enabled: AtomicBool::new(false),
             gen: AtomicU64::new(1),
             left_enabled: AtomicBool::new(false),
             right_enabled: AtomicBool::new(false),
@@ -710,6 +763,10 @@ impl TriggerManager {
             return;
         }
 
+        if !self.inner.system_enabled.swap(true, Ordering::SeqCst) {
+            set_system_triggers_enabled(true);
+        }
+
         let (lx, ly) = map_point(cfg.left.x_px, cfg.left.y_px, self.screen_w, self.screen_h, &self.ranges);
         let (rx, ry) = map_point(cfg.right.x_px, cfg.right.y_px, self.screen_w, self.screen_h, &self.ranges);
 
@@ -737,6 +794,9 @@ impl TriggerManager {
         self.inner.active.store(false, Ordering::SeqCst);
         self.inner.left_enabled.store(false, Ordering::SeqCst);
         self.inner.right_enabled.store(false, Ordering::SeqCst);
+        if self.inner.system_enabled.swap(false, Ordering::SeqCst) {
+            set_system_triggers_enabled(false);
+        }
 
         {
             let mut uif = self.inner.uif.lock().unwrap();
@@ -758,6 +818,9 @@ impl TriggerManager {
 impl Drop for TriggerManager {
     fn drop(&mut self) {
         self.inner.stop.store(true, Ordering::SeqCst);
+        if self.inner.system_enabled.swap(false, Ordering::SeqCst) {
+            set_system_triggers_enabled(false);
+        }
 
         // Restore native touch FIRST: ungrab the real touchscreen so the user keeps
         // working touch even if the forwarder thread is still blocked in read().

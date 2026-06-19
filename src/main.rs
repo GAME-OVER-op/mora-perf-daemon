@@ -13,7 +13,6 @@ mod leds;
 mod mem;
 mod notify;
 mod notifications;
-mod nubia_parts;
 mod power;
 mod procwatch;
 mod profiles;
@@ -207,9 +206,6 @@ let mut s = shared.write().unwrap();
             None
         }
     };
-    // Keep Nubia's system trigger switch off until Mora enters a game that has
-    // trigger coordinates enabled. This avoids leaving triggers enabled globally.
-    crate::nubia_parts::set_system_triggers_enabled(false);
 
     let gpu_busy_percent_path = {
         let p = PathBuf::from(GPU_BUSY_PERCENT);
@@ -326,10 +322,10 @@ let mut s = shared.write().unwrap();
         }
     };
 
-    let mut battery_percent: Option<u8> = None;
+    let mut battery_percent: Option<u8> = charge_probe.as_ref().and_then(|p| p.battery_percent());
     let mut last_batt_check = Instant::now();
-    // Battery percent is slow-changing; poll rarely to reduce wakeups.
-    let batt_check_every = Duration::from_secs(120);
+    // Battery percent is slow-changing; read once at startup, then poll every 5 minutes.
+    let batt_check_every = Duration::from_secs(5 * 60);
 
     let mut game_mode = false;
     // Minimum fan level while current foreground game is active (2..=5). Default matches config::GAME_FAN_BASE.
@@ -420,7 +416,6 @@ let mut s = shared.write().unwrap();
             if let Some(mgr) = triggers.as_ref() {
                 if last_triggers_cfg.is_some() {
                     mgr.disable();
-                    crate::nubia_parts::set_system_triggers_enabled(false);
                     last_triggers_cfg = None;
                     let mut s = shared.write().unwrap();
                     s.info.triggers_active = false;
@@ -492,14 +487,8 @@ let mut s = shared.write().unwrap();
 
                 if desired_trig != last_triggers_cfg {
                     match desired_trig {
-                        Some(cfg) => {
-                            crate::nubia_parts::set_system_triggers_enabled(true);
-                            mgr.set_config(cfg);
-                        }
-                        None => {
-                            mgr.disable();
-                            crate::nubia_parts::set_system_triggers_enabled(false);
-                        }
+                        Some(cfg) => mgr.set_config(cfg),
+                        None => mgr.disable(),
                     }
                     last_triggers_cfg = desired_trig;
                 }
@@ -802,12 +791,15 @@ let mut s = shared.write().unwrap();
             if cfg.use_phone_cooler {
                 fan_disabled_by_config = false;
                 let soc = read_soc_temp_mc(cpu_avg_mc, gpu_avg_mc).unwrap_or(-1);
+                // At 100% battery, don't keep the cooler running just because charging is connected.
+                // Game mode is excluded so per-game fan rules still work while playing.
+                let cooler_charging_effective = charging_effective && !(battery_percent == Some(100) && !game_mode);
                 f.apply(
                     &mut cache_u64,
                     soc,
                     batt_temp_mc,
                     screen_on,
-                    charging_effective,
+                    cooler_charging_effective,
                     game_mode,
                     game_fan_min_level,
                 );

@@ -147,7 +147,7 @@ private fun ExternalLedEditorCard(
         }
 
         Text("Mode", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        EnumModeRow(options = EXTERNAL_LED_MODES, selected = current.mode) { selected ->
+        EnumModeRow(options = ExternalLedMode.entries, selected = current.mode) { selected ->
             onSave(enabled, current.copy(mode = selected))
         }
 
@@ -202,38 +202,23 @@ private fun ExternalColorRow(selected: ExternalLedColor, onSelected: (ExternalLe
     }
 }
 
-private val FAN_LED_MODES = listOf(FanLedMode.STEADY, FanLedMode.BREATHE, FanLedMode.FLASHING, FanLedMode.BURST_FLASH, FanLedMode.FLOW)
+private val FAN_LED_MODES = listOf(FanLedMode.FLOW, FanLedMode.BREATHE, FanLedMode.FLASHING, FanLedMode.STEADY)
 
 private val FAN_LED_COLORS = listOf(
-    FanLedColor.RED to Color(0xFFFF1744),
-    FanLedColor.MIXED1 to Color(0xFFE056FD),
-    FanLedColor.ROSE to Color(0xFFFF3B8D),
-    FanLedColor.MIXED2 to Color(0xFFFF6B6B),
-    FanLedColor.ORANGE to Color(0xFFFF914D),
-    FanLedColor.MIXED3 to Color(0xFFFFA94D),
+    FanLedColor.ROSE to Color(0xFFFF3B5C),
     FanLedColor.YELLOW to Color(0xFFFFD86B),
-    FanLedColor.MIXED4 to Color(0xFF6BCB77),
     FanLedColor.GREEN to Color(0xFF4CD964),
-    FanLedColor.MIXED5 to Color(0xFF4D96FF),
-    FanLedColor.CYAN to Color(0xFF00C2FF),
-    FanLedColor.MIXED6 to Color(0xFFB892FF),
     FanLedColor.BLUE to Color(0xFF3A86FF),
-    FanLedColor.MIXED7 to Color(0xFFFF3B5C),
+    FanLedColor.CYAN to Color(0xFF00C2FF),
     FanLedColor.PURPLE to Color(0xFF9B5DE5),
-)
-
-private val EXTERNAL_LED_MODES = listOf(
-    ExternalLedMode.SOUND,
-    ExternalLedMode.STEADY,
-    ExternalLedMode.BREATHE,
-    ExternalLedMode.FLASHING,
-    ExternalLedMode.DOUBLE_FLASH,
-    ExternalLedMode.FLOW,
-    ExternalLedMode.RIPPLE,
-    ExternalLedMode.ECHO,
-    ExternalLedMode.JUMP,
-    ExternalLedMode.BURST_FLASH,
-    ExternalLedMode.CYCLE_FLASH,
+    FanLedColor.ORANGE to Color(0xFFFF914D),
+    FanLedColor.MIXED1 to Color(0xFFE056FD),
+    FanLedColor.MIXED2 to Color(0xFFFF6B6B),
+    FanLedColor.MIXED3 to Color(0xFFFFA94D),
+    FanLedColor.MIXED4 to Color(0xFF6BCB77),
+    FanLedColor.MIXED5 to Color(0xFF4D96FF),
+    FanLedColor.MIXED6 to Color(0xFFB892FF),
+    FanLedColor.MIXED7 to Color(0xFFFF3B5C),
 )
 
 private val EXTERNAL_LED_COLORS = listOf(
@@ -245,6 +230,8 @@ private val EXTERNAL_LED_COLORS = listOf(
     ExternalLedColor.CYAN to Color(0xFF00C2FF),
     ExternalLedColor.WHITE to Color(0xFFF5F5F5),
     ExternalLedColor.PURPLE to Color(0xFF9B5DE5),
+    ExternalLedColor.PINK to Color(0xFFFF66C4),
+    ExternalLedColor.ORANGE to Color(0xFFFF914D),
 )
 
 private fun buildSavePayload(config: UserConfig, normal: ProfileConfig, gaming: ProfileConfig): UiSavePayload = UiSavePayload(

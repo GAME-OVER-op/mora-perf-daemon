@@ -7,47 +7,12 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Download vendor_boot image from release
-        env:
-          VENDOR_BOOT_RELEASE_TAG: Files
-        run: |
-          set -euo pipefail
-          mkdir -p magisk/vendor_boot
-
-          release_json=$(curl -fsSL             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${VENDOR_BOOT_RELEASE_TAG}")
-
-          asset_url=$(printf '%s' "$release_json" | jq -r '
-            .assets
-            | map(select((.name | ascii_downcase | endswith(".img")) and true))
-            | .[0].browser_download_url // empty
-          ')
-
-          asset_name=$(printf '%s' "$release_json" | jq -r '
-            .assets
-            | map(select((.name | ascii_downcase | endswith(".img")) and true))
-            | .[0].name // empty
-          ')
-
-          if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
-            echo "No .img asset found in release tag '${VENDOR_BOOT_RELEASE_TAG}'" >&2
-            exit 1
-          fi
-
-          echo "Downloading asset: ${asset_name}"
-          curl -fL "$asset_url" -o magisk/vendor_boot/vendor_boot_oc.img
-
-          test -s magisk/vendor_boot/vendor_boot_oc.img
-          ls -lh magisk/vendor_boot/vendor_boot_oc.img
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -82,7 +47,15 @@ jobs:
       - name: Generate debug keystore for release signing
         run: |
           mkdir -p "$RUNNER_TEMP/mora-signing"
-          keytool -genkeypair             -keystore "$RUNNER_TEMP/mora-signing/debug-release.keystore"             -storepass android             -keypass android             -alias androiddebugkey             -keyalg RSA             -keysize 2048             -validity 10000             -dname "CN=Android Debug,O=Android,C=US"
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/mora-signing/debug-release.keystore" \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
           echo "MORA_RELEASE_KEYSTORE=$RUNNER_TEMP/mora-signing/debug-release.keystore" >> "$GITHUB_ENV"
           echo "MORA_RELEASE_KEYSTORE_PASSWORD=android" >> "$GITHUB_ENV"
           echo "MORA_RELEASE_KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
@@ -93,11 +66,17 @@ jobs:
 
       - name: Verify APK signature schemes
         run: |
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify             --verbose             --print-certs             app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify \
+            --verbose \
+            --print-certs \
+            app/build/outputs/apk/release/app-release.apk
 
       - name: Package Magisk module
         run: |
-          APK_PATH="app/build/outputs/apk/release/app-release.apk"           RUST_BIN="target/aarch64-linux-android/release/perf_daemon"           ZIP_NAME="mora_perf_deamon-${GITHUB_SHA}.zip"           ./scripts/package_magisk.sh
+          APK_PATH="app/build/outputs/apk/release/app-release.apk" \
+          RUST_BIN="target/aarch64-linux-android/release/perf_daemon" \
+          ZIP_NAME="mora_perf_deamon-${GITHUB_SHA}.zip" \
+          ./scripts/package_magisk.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
