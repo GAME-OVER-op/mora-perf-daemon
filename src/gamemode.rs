@@ -113,7 +113,6 @@ fn read_top_app_ids(path: &str) -> Vec<u32> {
 
 fn get_top_app_from_cpuset() -> Option<String> {
     let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
 
     for path in TOP_APP_PROCS {
         if !Path::new(path).exists() {
@@ -124,20 +123,14 @@ fn get_top_app_from_cpuset() -> Option<String> {
                 continue;
             }
             if let Some(pkg) = candidate_package_for_id(id) {
-                if !candidates.contains(&pkg) {
-                    candidates.push(pkg);
-                }
+                // Match the known-good shell probe behavior: the first valid
+                // package in top-app is the current foreground app on this device.
+                return Some(pkg);
             }
-        }
-        // cgroup.procs is cleaner than tasks. If it gave us a candidate, use it.
-        if !candidates.is_empty() && path.ends_with("cgroup.procs") {
-            break;
         }
     }
 
-    // Prefer non-keyboard/non-launcher candidates. If multiple remain, the most
-    // recently added top-app process is commonly the real foreground app on Android.
-    candidates.into_iter().last()
+    None
 }
 
 fn sh_out(cmd: &str) -> Option<String> {
