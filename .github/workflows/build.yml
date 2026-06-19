@@ -71,6 +71,24 @@ jobs:
             --print-certs \
             app/build/outputs/apk/release/app-release.apk
 
+      - name: Download flash images
+        env:
+          IMAGE_RELEASE_BASE: https://github.com/GAME-OVER-op/mora-perf-daemon/releases/download/Files
+        run: |
+          mkdir -p magisk/images
+
+          curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
+            "$IMAGE_RELEASE_BASE/vendor_boot_oc.img" \
+            -o magisk/images/vendor_boot_oc.img
+
+          curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
+            "$IMAGE_RELEASE_BASE/orangefox_recovery.img" \
+            -o magisk/images/orangefox_recovery.img
+
+          test -s magisk/images/vendor_boot_oc.img
+          test -s magisk/images/orangefox_recovery.img
+          ls -lh magisk/images
+
       - name: Package Magisk module
         run: |
           APK_PATH="app/build/outputs/apk/release/app-release.apk" \
