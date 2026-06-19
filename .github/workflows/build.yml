@@ -116,12 +116,12 @@ jobs:
           PY
 
           source "$RUNNER_TEMP/mora-image-urls.env"
-          echo "Downloading $VENDOR_BOOT_OC_NAME"
+          echo "Downloading ${VENDOR_BOOT_OC_URL_NAME:-vendor_boot image}"
           curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
             "$VENDOR_BOOT_OC_URL" \
             -o magisk/images/vendor_boot_oc.img
 
-          echo "Downloading $ORANGEFOX_RECOVERY_NAME"
+          echo "Downloading ${ORANGEFOX_RECOVERY_URL_NAME:-OrangeFox image}"
           curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
             "$ORANGEFOX_RECOVERY_URL" \
             -o magisk/images/orangefox_recovery.img
