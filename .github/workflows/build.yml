@@ -73,16 +73,50 @@ jobs:
 
       - name: Download flash images
         env:
-          IMAGE_RELEASE_BASE: https://github.com/GAME-OVER-op/mora-perf-daemon/releases/download/Files
+          RELEASE_API_URL: https://api.github.com/repos/GAME-OVER-op/mora-perf-daemon/releases/tags/Files
         run: |
+          set -euo pipefail
           mkdir -p magisk/images
 
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            "$RELEASE_API_URL" \
+            -o "$RUNNER_TEMP/mora-files-release.json"
+
+          python3 - <<'PY' > "$RUNNER_TEMP/mora-image-urls.env"
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          data = json.loads(Path(os.environ["RUNNER_TEMP"], "mora-files-release.json").read_text())
+          assets = data.get("assets", [])
+
+          def find_asset(output_name, *patterns):
+              for pattern in patterns:
+                  rx = re.compile(pattern, re.IGNORECASE)
+                  for asset in assets:
+                      name = asset.get("name", "")
+                      if rx.search(name):
+                          print(f"{output_name}={asset['browser_download_url']}")
+                          print(f"{output_name}_NAME={name}")
+                          return
+              names = "\n".join(f"- {asset.get('name', '')}" for asset in assets) or "- <no assets>"
+              raise SystemExit(f"Could not find {output_name}. Available release assets:\n{names}")
+
+          find_asset("VENDOR_BOOT_OC_URL", r"^vendor_boot_oc\.img$", r"vendor[_-]?boot.*oc.*\.img$", r"vendor[_-]?boot.*overclock.*\.img$")
+          find_asset("ORANGEFOX_RECOVERY_URL", r"^orangefox_recovery\.img$", r"orangefox.*recovery.*\.img$", r"orangefox.*\.img$")
+          PY
+
+          source "$RUNNER_TEMP/mora-image-urls.env"
+          echo "Downloading $VENDOR_BOOT_OC_NAME"
           curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
-            "$IMAGE_RELEASE_BASE/vendor_boot_oc.img" \
+            "$VENDOR_BOOT_OC_URL" \
             -o magisk/images/vendor_boot_oc.img
 
+          echo "Downloading $ORANGEFOX_RECOVERY_NAME"
           curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
-            "$IMAGE_RELEASE_BASE/orangefox_recovery.img" \
+            "$ORANGEFOX_RECOVERY_URL" \
             -o magisk/images/orangefox_recovery.img
 
           test -s magisk/images/vendor_boot_oc.img
