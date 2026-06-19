@@ -104,7 +104,14 @@ jobs:
               names = "\n".join(f"- {asset.get('name', '')}" for asset in assets) or "- <no assets>"
               raise SystemExit(f"Could not find {output_name}. Available release assets:\n{names}")
 
-          find_asset("VENDOR_BOOT_OC_URL", r"^vendor_boot_oc\.img$", r"vendor[_-]?boot.*oc.*\.img$", r"vendor[_-]?boot.*overclock.*\.img$")
+          find_asset(
+              "VENDOR_BOOT_OC_URL",
+              r"^vendor_boot_oc\.img$",
+              r"^vendor_boot_os\.img$",
+              r"vendor[_-]?boot.*oc.*\.img$",
+              r"vendor[_-]?boot.*os.*\.img$",
+              r"vendor[_-]?boot.*overclock.*\.img$",
+          )
           find_asset("ORANGEFOX_RECOVERY_URL", r"^orangefox_recovery\.img$", r"orangefox.*recovery.*\.img$", r"orangefox.*\.img$")
           PY
 
