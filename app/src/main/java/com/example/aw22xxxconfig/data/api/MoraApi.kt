@@ -22,8 +22,6 @@ interface MoraApi {
     @POST("api/games/set_gpu_turbo") suspend fun setGameGpuTurbo(@Body payload: GameSetGpuTurboPayload)
     @POST("api/games/set_fan_min") suspend fun setGameFanMin(@Body payload: GameSetFanMinPayload)
     @POST("api/games/set_triggers") suspend fun setGameTriggers(@Body payload: GameSetTriggersPayload)
-    @POST("api/triggers/preview") suspend fun setTriggerPreview(@Body payload: TriggerPreviewPayload)
-    @POST("api/triggers/preview_clear") suspend fun clearTriggerPreview()
     @POST("api/games/set_split_charge") suspend fun setGameSplitCharge(@Body payload: GameSetSplitChargePayload)
     @POST("api/games/set_disable_thermal_limit") suspend fun setGameDisableThermalLimit(@Body payload: GameSetDisableThermalLimitPayload)
     @POST("api/save") suspend fun saveConfig(@Body payload: UiSavePayload)

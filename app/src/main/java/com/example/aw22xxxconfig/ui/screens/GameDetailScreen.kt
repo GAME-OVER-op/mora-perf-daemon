@@ -26,15 +26,14 @@ import com.example.aw22xxxconfig.MoraViewModel
 import com.example.aw22xxxconfig.data.model.TriggerPoint
 import com.example.aw22xxxconfig.data.model.TriggersConfig
 import com.example.aw22xxxconfig.ui.components.MoraCard
-import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 @Composable
 fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -> Unit) {
     val games by viewModel.games.collectAsState()
-    val state by viewModel.state.collectAsState()
     val app = viewModel.appForPackage(packageName)
     val game = games.firstOrNull { it.packageName == packageName }
+    val triggerPreview by viewModel.triggerPreview.collectAsState()
 
     if (game == null) {
         ErrorScreen(message = "Game not found", onRetry = onBack)
@@ -48,28 +47,11 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
     var previewLeft by remember(game.packageName) { mutableStateOf(Offset(180f, 520f)) }
     var previewRight by remember(game.packageName) { mutableStateOf(Offset(936f, 520f)) }
 
-    LaunchedEffect(showTriggerEditor, packageName, previewLeft, previewRight) {
-        if (!showTriggerEditor) return@LaunchedEffect
-        val preview = TriggersConfig(
-            enabled = true,
-            left = TriggerPoint(enabled = true, x = previewLeft.x.roundToInt().coerceAtLeast(0), y = previewLeft.y.roundToInt().coerceAtLeast(0)),
-            right = TriggerPoint(enabled = true, x = previewRight.x.roundToInt().coerceAtLeast(0), y = previewRight.y.roundToInt().coerceAtLeast(0)),
-        )
-        viewModel.setTriggerPreview(packageName, preview)
-    }
-
-    LaunchedEffect(showTriggerEditor) {
-        if (!showTriggerEditor) return@LaunchedEffect
-        while (showTriggerEditor) {
-            viewModel.refreshStateOnly()
-            delay(140)
-        }
-    }
-
     fun openTriggerEditor(left: TriggerPoint, right: TriggerPoint) {
         previewLeft = Offset(left.x.ifZero(180).toFloat(), left.y.ifZero(520).toFloat())
         previewRight = Offset(right.x.ifZero(936).toFloat(), right.y.ifZero(520).toFloat())
         showTriggerEditor = true
+        viewModel.startTriggerPreview()
     }
 
     Column(
@@ -119,7 +101,10 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
                     onValueChangeFinished = {
                         val percent = splitChargePercent.roundToInt().coerceIn(0, 100)
                         if (percent != splitCharge.stopBatteryPercent) {
-                            viewModel.setGameSplitCharge(packageName, splitCharge.copy(stopBatteryPercent = percent))
+                            viewModel.setGameSplitCharge(
+                                packageName,
+                                splitCharge.copy(stopBatteryPercent = percent)
+                            )
                         }
                     },
                     valueRange = 0f..100f,
@@ -151,11 +136,12 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
         TriggerPickerFullscreen(
             initialLeft = previewLeft,
             initialRight = previewRight,
-            leftPressed = state.triggers.leftPressed,
-            rightPressed = state.triggers.rightPressed,
+            leftPressed = triggerPreview.leftPressed,
+            rightPressed = triggerPreview.rightPressed,
+            errorText = triggerPreview.error,
             onDismiss = {
                 showTriggerEditor = false
-                viewModel.clearTriggerPreview()
+                viewModel.stopTriggerPreview()
             },
             onSave = { left, right ->
                 val triggers = game.triggers ?: TriggersConfig(enabled = true)
@@ -165,7 +151,7 @@ fun GameDetailScreen(viewModel: MoraViewModel, packageName: String, onBack: () -
                     right = TriggerPoint(true, right.x.roundToInt().coerceAtLeast(0), right.y.roundToInt().coerceAtLeast(0)),
                 )
                 showTriggerEditor = false
-                viewModel.clearTriggerPreview()
+                viewModel.stopTriggerPreview()
                 viewModel.setGameTriggers(packageName, updated)
             }
         )
@@ -200,6 +186,7 @@ private fun TriggerPickerFullscreen(
     initialRight: Offset,
     leftPressed: Boolean,
     rightPressed: Boolean,
+    errorText: String?,
     onDismiss: () -> Unit,
     onSave: (Offset, Offset) -> Unit,
 ) {
@@ -257,15 +244,16 @@ private fun TriggerPickerFullscreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text("Trigger coordinates", style = MaterialTheme.typography.titleMedium)
-                Text("Press the shoulder trigger: matching bar and point will light up.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Preview is isolated from daemon trigger runtime.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     when {
+                        errorText != null -> errorText
                         leftPressed && rightPressed -> "Both triggers pressed"
                         leftPressed -> "Left trigger pressed"
                         rightPressed -> "Right trigger pressed"
                         else -> "Waiting for trigger press"
                     },
-                    color = if (leftPressed || rightPressed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (errorText != null) MaterialTheme.colorScheme.error else if (leftPressed || rightPressed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 

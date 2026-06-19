@@ -44,8 +44,11 @@ pub struct InfoState {
     pub reduce_percent: u8,
 
     pub screen_on: bool,
+    // Hardware charging state (as detected by mora)
     pub charging: bool,
+    // Config switch (user can disable charging behavior)
     pub charging_enabled: bool,
+    // Effective state used in logic = charging && charging_enabled
     pub charging_effective: bool,
     pub game_mode: bool,
     pub idle_mode: bool,
@@ -53,27 +56,29 @@ pub struct InfoState {
     pub active_profile: String,
     pub led_profile: String,
 
+    // Battery percentage (0..100), if available
     pub battery_percent: Option<u8>,
+    // Smart battery saver runtime status
     pub battery_saver_active: bool,
     pub battery_saver_override: bool,
     pub battery_saver_disabled_cores: Vec<u8>,
     pub battery_saver_reapply_in_sec: Option<u64>,
 
+    // Screen-off core saver runtime status
     pub screen_off_core_saver_active: bool,
     pub screen_off_core_saver_disabled_cores: Vec<u8>,
 
+    // Split charge runtime status
     pub split_charge_active: bool,
     pub split_charge_package: Option<String>,
     pub split_charge_node: Option<String>,
     pub split_charge_stop_battery_percent: Option<u8>,
     pub split_charge_last_error: Option<String>,
 
+    // Triggers (shoulder buttons -> virtual touch)
     pub triggers_active: bool,
     pub triggers_left: bool,
     pub triggers_right: bool,
-    pub triggers_left_pressed: bool,
-    pub triggers_right_pressed: bool,
-    pub triggers_preview: bool,
     pub triggers_pkg: Option<String>,
 }
 
@@ -94,6 +99,7 @@ impl Default for InfoState {
             idle_mode: false,
             active_profile: String::new(),
             led_profile: String::new(),
+
             battery_percent: None,
             battery_saver_active: false,
             battery_saver_override: false,
@@ -106,12 +112,10 @@ impl Default for InfoState {
             split_charge_node: None,
             split_charge_stop_battery_percent: None,
             split_charge_last_error: None,
+
             triggers_active: false,
             triggers_left: false,
             triggers_right: false,
-            triggers_left_pressed: false,
-            triggers_right_pressed: false,
-            triggers_preview: false,
             triggers_pkg: None,
         }
     }
@@ -129,8 +133,6 @@ pub struct SharedState {
 
     pub info: InfoState,
     pub leds: LedRuntimeState,
-    pub trigger_preview: Option<crate::games::TriggersConfig>,
-    pub trigger_preview_package: Option<String>,
 }
 
 impl SharedState {
@@ -139,13 +141,13 @@ impl SharedState {
             config,
             config_rev: 0,
             last_config_error: None,
+
             games,
             games_rev: 0,
             last_games_error: None,
+
             info: InfoState::default(),
             leds: LedRuntimeState::default(),
-            trigger_preview: None,
-            trigger_preview_package: None,
         }
     }
 }

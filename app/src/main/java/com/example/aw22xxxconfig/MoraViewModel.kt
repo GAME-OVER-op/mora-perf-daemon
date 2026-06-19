@@ -11,6 +11,8 @@ import com.example.aw22xxxconfig.data.root.InstalledAppsProvider
 import com.example.aw22xxxconfig.data.root.RootShell
 import com.example.aw22xxxconfig.data.root.SystemMaintenance
 import com.example.aw22xxxconfig.data.root.TokenReader
+import com.example.aw22xxxconfig.data.root.TriggerPreviewHelper
+import com.example.aw22xxxconfig.data.root.TriggerPreviewState
 import com.example.aw22xxxconfig.data.root.VendorBootFlasher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,6 +68,9 @@ class MoraViewModel(
 
     private val _maintenance = MutableStateFlow(MaintenanceState())
     val maintenance: StateFlow<MaintenanceState> = _maintenance.asStateFlow()
+
+    private val triggerPreviewHelper = TriggerPreviewHelper()
+    val triggerPreview: StateFlow<TriggerPreviewState> = triggerPreviewHelper.state
 
     private var refreshJob: Job? = null
 
@@ -269,24 +274,6 @@ class MoraViewModel(
         }
     }
 
-    fun setTriggerPreview(packageName: String?, triggers: TriggersConfig) {
-        viewModelScope.launch {
-            runCatching {
-                repository.setTriggerPreview(packageName, triggers)
-                _state.value = repository.state()
-            }.onFailure { _message.value = it.message }
-        }
-    }
-
-    fun clearTriggerPreview() {
-        viewModelScope.launch {
-            runCatching {
-                repository.clearTriggerPreview()
-                _state.value = repository.state()
-            }.onFailure { _message.value = it.message }
-        }
-    }
-
     fun setGameSplitCharge(packageName: String, splitCharge: SplitChargeConfig) {
         viewModelScope.launch {
             runCatching {
@@ -330,6 +317,14 @@ class MoraViewModel(
         runMaintenance { SystemMaintenance.checkOverlayPermission(appContext.packageName).getOrThrow() }
     }
 
+    fun startTriggerPreview() {
+        triggerPreviewHelper.start()
+    }
+
+    fun stopTriggerPreview() {
+        triggerPreviewHelper.stop()
+    }
+
     fun isVendorBootSupportedDevice(): Boolean = VendorBootFlasher.isSupportedDevice()
 
 
@@ -346,6 +341,11 @@ class MoraViewModel(
         }
     }
     fun appForPackage(packageName: String): InstalledApp? = _installedApps.value.firstOrNull { it.packageName == packageName }
+
+    override fun onCleared() {
+        triggerPreviewHelper.stop()
+        super.onCleared()
+    }
 
     companion object {
         fun factory(context: Context): ViewModelProvider.Factory = object : ViewModelProvider.Factory {

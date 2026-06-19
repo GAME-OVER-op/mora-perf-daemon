@@ -36,12 +36,9 @@ data class StateResponse(
 )
 @Serializable data class TriggerRuntime(
     val active: Boolean = false,
-    val preview: Boolean = false,
     @SerialName("package") val packageName: String? = null,
     val left: Boolean = false,
     val right: Boolean = false,
-    @SerialName("left_pressed") val leftPressed: Boolean = false,
-    @SerialName("right_pressed") val rightPressed: Boolean = false,
 )
 @Serializable data class MemoryState(@SerialName("VmRSS_kb") val vmRssKb: Long? = null)
 @Serializable data class GamesRuntime(val count: Int = 0, @SerialName("driver_count") val driverCount: Int = 0, @SerialName("last_error") val lastError: String? = null)
@@ -141,7 +138,6 @@ data class UserConfig(
 @Serializable data class GameSetGpuTurboPayload(@SerialName("package") val packageName: String, @SerialName("gpu_turbo") val gpuTurbo: Boolean)
 @Serializable data class GameSetFanMinPayload(@SerialName("package") val packageName: String, @SerialName("fan_min_level") val fanMinLevel: Int)
 @Serializable data class GameSetTriggersPayload(@SerialName("package") val packageName: String, val triggers: TriggersConfig)
-@Serializable data class TriggerPreviewPayload(@SerialName("package") val packageName: String? = null, val triggers: TriggersConfig)
 @Serializable data class GameSetSplitChargePayload(@SerialName("package") val packageName: String, @SerialName("split_charge") val splitCharge: SplitChargeConfig)
 @Serializable data class GameSetDisableThermalLimitPayload(@SerialName("package") val packageName: String, @SerialName("disable_thermal_limit") val disableThermalLimit: Boolean)
 
